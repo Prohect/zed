@@ -20,6 +20,11 @@ pub struct BufferContent {
 /// Returns either the full content of a buffer or its outline, depending on size.
 /// For files larger than AUTO_OUTLINE_SIZE, returns an outline with a header.
 /// For smaller files, returns the full content.
+///
+/// NOTE: For outline rendering we also attempt to include a short "signature snippet"
+/// for each outline entry. This snippet is the first non-empty line of the symbol's
+/// source-range (if available). The snippet is intended to help disambiguate symbols
+/// (for example, show function parameter lists).
 pub async fn get_buffer_content_or_outline(
     buffer: Entity<Buffer>,
     path: Option<&str>,
@@ -34,18 +39,34 @@ pub async fn get_buffer_content_or_outline(
             .read_with(cx, |buffer, _| buffer.parsing_idle())?
             .await;
 
-        let outline_items = buffer.read_with(cx, |buffer, _| {
+        // Build a vector of (OutlineItem<Point>, Option<snippet_string>) by reading the snapshot once.
+        // The snippet is the first non-empty line from the item's source_range_for_text start row.
+        let outline_items_with_snippets = buffer.read_with(cx, |buffer, _| {
             let snapshot = buffer.snapshot();
             snapshot
                 .outline(None)
                 .items
                 .into_iter()
-                .map(|item| item.to_point(&snapshot))
+                .map(|item| {
+                    let p_item = item.to_point(&snapshot);
+                    // Use the source_range_for_text.start as the place to grab a signature-like snippet.
+                    let start = p_item.source_range_for_text.start;
+                    // Read the rest of the start row by taking start .. start_row+1
+                    let line_end = Point::new(start.row.saturating_add(1), 0);
+                    let snippet = snapshot
+                        .text_for_range(start..line_end)
+                        .collect::<String>()
+                        .lines()
+                        .next()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    (p_item, snippet)
+                })
                 .collect::<Vec<_>>()
         })?;
 
         // If no outline exists, fall back to first 1KB so the agent has some context
-        if outline_items.is_empty() {
+        if outline_items_with_snippets.is_empty() {
             let text = buffer.read_with(cx, |buffer, _| {
                 let snapshot = buffer.snapshot();
                 let len = snapshot.len().min(snapshot.as_rope().floor_char_boundary(1024));
@@ -63,7 +84,7 @@ pub async fn get_buffer_content_or_outline(
             });
         }
 
-        let outline_text = render_outline(outline_items, None, 0, usize::MAX).await?;
+        let outline_text = render_outline(outline_items_with_snippets, None, 0, usize::MAX).await?;
 
         let text = if let Some(path) = path {
             format!("# File outline for {path}\n\n{outline_text}",)
@@ -84,8 +105,10 @@ pub async fn get_buffer_content_or_outline(
     }
 }
 
+/// Render outline where items also carry an optional signature snippet string.
+/// Items: IntoIterator<Item = (OutlineItem<Point>, Option<String>)>
 async fn render_outline(
-    items: impl IntoIterator<Item = OutlineItem<Point>>,
+    items: impl IntoIterator<Item = (OutlineItem<Point>, Option<String>)>,
     regex: Option<Regex>,
     offset: usize,
     results_per_page: usize,
@@ -94,7 +117,7 @@ async fn render_outline(
 
     let entries = items
         .by_ref()
-        .filter(|item| {
+        .filter(|(item, _snippet)| {
             regex
                 .as_ref()
                 .is_none_or(|regex| regex.is_match(&item.text))
@@ -130,18 +153,30 @@ async fn render_outline(
     Ok(output)
 }
 
+/// Render entries; each entry is (OutlineItem<Point>, Option<snippet>).
+/// If a snippet exists, append it after the symbol text (short, single-line).
 fn render_entries(
     output: &mut String,
-    items: impl IntoIterator<Item = OutlineItem<Point>>,
+    items: impl IntoIterator<Item = (OutlineItem<Point>, Option<String>)>,
 ) -> usize {
     let mut entries_rendered = 0;
 
-    for item in items {
+    for (item, snippet) in items {
         // Indent based on depth ("" for level 0, "  " for level 1, etc.)
         for _ in 0..item.depth {
             output.push(' ');
         }
-        output.push_str(&item.text);
+
+        // Append snippet if available
+        if let Some(sig) = snippet {
+            // Keep snippet short and on one line
+            let sig = sig.lines().next().unwrap_or("").trim();
+            if !sig.is_empty() {
+                write!(output, "{}", sig).ok();
+            }
+        } else {
+            output.push_str(&item.text);
+        }
 
         // Add position information - convert to 1-based line numbers for display
         let start_line = item.range.start.row + 1;
