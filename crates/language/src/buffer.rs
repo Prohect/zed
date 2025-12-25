@@ -4232,7 +4232,7 @@ impl BufferSnapshot {
         config: &OutlineConfig,
         mat: &SyntaxMapMatch,
         range: &Range<usize>,
-        include_extra_context: bool,
+        _include_extra_context: bool,
         theme: Option<&SyntaxTheme>,
     ) -> Option<OutlineItem<Point>> {
         let item_node = mat.captures.iter().find_map(|cap| {
@@ -4270,8 +4270,9 @@ impl BufferSnapshot {
             if capture.index == config.name_capture_ix {
                 add_to_buffer_ranges(capture.node, true);
             } else if Some(capture.index) == config.context_capture_ix
-                || (Some(capture.index) == config.extra_context_capture_ix && include_extra_context)
+                || Some(capture.index) == config.extra_context_capture_ix
             {
+                // Always include extra context into the main `text` so `text` contains the full signature.
                 add_to_buffer_ranges(capture.node, false);
             } else {
                 if Some(capture.index) == config.open_capture_ix {

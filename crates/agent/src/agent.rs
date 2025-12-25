@@ -1,3 +1,4 @@
+mod contextual_anchor;
 mod db;
 mod edit_agent;
 mod history_store;
@@ -11,6 +12,7 @@ mod thread;
 mod tools;
 
 use context_server::ContextServerId;
+pub use contextual_anchor::ContextualAnchor;
 pub use db::*;
 pub use history_store::*;
 pub use native_agent_server::NativeAgentServer;

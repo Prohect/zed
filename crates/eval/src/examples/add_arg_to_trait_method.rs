@@ -54,6 +54,7 @@ impl Example for AddArgToTraitMethod {
             "open_tool",
             "path_search_tool",
             "read_file_tool",
+            "find_references_tool",
             "rename_tool",
             "symbol_info_tool",
             "terminal_tool",

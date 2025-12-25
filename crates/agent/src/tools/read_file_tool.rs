@@ -436,12 +436,12 @@ mod test {
         assert_eq!(
             content.lines().skip(7).take(6).collect::<Vec<_>>(),
             vec![
-                "struct Test0 [L1-4]",
-                " a [L2]",
-                " b [L3]",
-                "struct Test1 [L5-8]",
-                " a [L6]",
-                " b [L7]",
+                "struct Test0 { [L1-4]",
+                " a: u32, [L2]",
+                " b: usize, [L3]",
+                "struct Test1 { [L5-8]",
+                " a: u32, [L6]",
+                " b: usize, [L7]",
             ]
         );
 
@@ -460,9 +460,9 @@ mod test {
         let expected_content = (0..1000)
             .flat_map(|i| {
                 vec![
-                    format!("struct Test{} [L{}-{}]", i, i * 4 + 1, i * 4 + 4),
-                    format!(" a [L{}]", i * 4 + 2),
-                    format!(" b [L{}]", i * 4 + 3),
+                    format!("struct Test{} {{ [L{}-{}]", i, i * 4 + 1, i * 4 + 4),
+                    format!(" a: u32, [L{}]", i * 4 + 2),
+                    format!(" b: usize, [L{}]", i * 4 + 3),
                 ]
             })
             .collect::<Vec<_>>();
