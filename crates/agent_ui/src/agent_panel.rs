@@ -10985,6 +10985,7 @@ mod tests {
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Default::default(),
             tool_filter: None,
+            pending_non_blocking_tool_calls: Vec::new(),
         };
 
         let thread_store = cx.update(|cx| ThreadStore::global(cx));
