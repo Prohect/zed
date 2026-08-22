@@ -1574,6 +1574,7 @@ async fn test_subagent_can_use_non_blocking_tool_calls(cx: &mut TestAppContext) 
         label: "label".to_string(),
         message: "subagent task prompt".to_string(),
         session_id: None,
+        tools: None,
     };
     model.send_last_completion_stream_event(LanguageModelCompletionEvent::ToolUse(
         LanguageModelToolUse {
@@ -1906,6 +1907,7 @@ async fn test_spawn_agent_steers_running_subagent(cx: &mut TestAppContext) {
         session_id: Some(acp::SessionId::new(
             session_alias(&subagent_session_id).to_string(),
         )),
+        tools: None,
     };
     model.send_completion_stream_event(
         &parent_completion,
