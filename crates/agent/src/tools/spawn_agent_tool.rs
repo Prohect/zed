@@ -218,8 +218,12 @@ impl AgentTool for SpawnAgentTool {
                 }
             }
 
-            let (subagent, mut session_info) = cx.update(|cx| {
-                let subagent = if let Some(session_id) = input.session_id {
+            // Resuming a session that is no longer live (e.g. Zed was
+            // restarted after it was spawned) may need to load the subagent
+            // thread back from disk first, so resuming yields a task while
+            // creating is synchronous.
+            let subagent_task = cx.update(|cx| {
+                if let Some(session_id) = input.session_id {
                     // A resumed session keeps the tool filter it was created
                     // with; `tools` is intentionally ignored here.
                     self.environment.resume_subagent(session_id, cx)
@@ -227,13 +231,21 @@ impl AgentTool for SpawnAgentTool {
                     let tool_filter = input
                         .tools
                         .map(|tools| tools.into_iter().map(SharedString::from).collect());
-                    self.environment.create_subagent(input.label, tool_filter, cx)
-                };
-                let subagent = subagent.map_err(|err| SpawnAgentToolOutput::Error {
+                    Task::ready(
+                        self.environment
+                            .create_subagent(input.label, tool_filter, cx),
+                    )
+                }
+            });
+            let subagent = subagent_task
+                .await
+                .map_err(|err| SpawnAgentToolOutput::Error {
                     session_id: None,
                     error: err.to_string(),
                     session_info: None,
                 })?;
+
+            let mut session_info = cx.update(|cx| {
                 let session_info = SubagentSessionInfo {
                     session_id: subagent.id(),
                     message_start_index: subagent.num_entries(cx),
@@ -249,8 +261,8 @@ impl AgentTool for SpawnAgentTool {
                     )])),
                 );
 
-                Ok((subagent, session_info))
-            })?;
+                session_info
+            });
 
             event_stream.report_non_blocking_identity(serde_json::json!({
                 "session_id": session_alias(&session_info.session_id),
