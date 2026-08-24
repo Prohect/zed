@@ -1699,9 +1699,15 @@ impl Thread {
         let Ok(input) = tool_use.input.clone().into_json() else {
             return;
         };
-        let title = tool.initial_title(input.clone(), cx);
+        // Strip the runtime-managed `blocking` flag before any tool-typed
+        // parsing (see `split_blocking_flag`): tools never see it, and input
+        // structs with `deny_unknown_fields` (e.g. the terminal tool) would
+        // otherwise fail to parse, losing the title and replayed content.
+        // The raw input is still passed to `send_tool_call` for display.
+        let (tool_input, _) = split_blocking_flag(input.clone());
+        let title = tool.initial_title(tool_input.clone(), cx);
         let kind = tool.kind();
-        stream.send_tool_call(&tool_call_id, &tool_use.name, title, kind, input.clone());
+        stream.send_tool_call(&tool_call_id, &tool_use.name, title, kind, input);
 
         if let Some(content) = replay_content {
             stream.update_tool_call_fields(
@@ -1723,7 +1729,7 @@ impl Thread {
                 self.sandbox_grants.clone(),
                 Some(cx.weak_entity()),
             );
-            tool.replay(input, output, tool_event_stream, cx).log_err();
+            tool.replay(tool_input, output, tool_event_stream, cx).log_err();
         }
 
         stream.update_tool_call_fields(
@@ -3739,6 +3745,11 @@ impl Thread {
         let mut kind = acp::ToolKind::Other;
         if let Some(tool) = tool.as_ref() {
             if let Ok(input) = tool_use.input.clone().into_json() {
+                // Strip the runtime-managed `blocking` flag before tool-typed
+                // parsing (see `split_blocking_flag`), same as the run path
+                // below — otherwise inputs carrying it fail to parse into
+                // structs with `deny_unknown_fields` and the title is lost.
+                let (input, _) = split_blocking_flag(input);
                 title = tool.initial_title(input, cx);
             }
             kind = tool.kind();

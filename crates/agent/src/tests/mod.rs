@@ -3656,6 +3656,64 @@ async fn test_terminal_tool_cancellation_captures_output(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+async fn test_terminal_tool_title_with_blocking_flag(cx: &mut TestAppContext) {
+    // The runtime advertises a `blocking` property on every tool's input
+    // schema (see `build_completion_request`). It must be stripped before the
+    // input reaches tool-typed parsing: `TerminalToolInput` denies unknown
+    // fields, so an unstripped `blocking` would fail parsing and the tool
+    // call card would lose its title (the command) instead of rendering it.
+    let ThreadTest { model, thread, .. } = setup(cx, TestModel::Fake).await;
+    always_allow_tools(cx);
+    disable_sandboxing(cx);
+    let fake_model = model.as_fake();
+
+    let environment = Rc::new(cx.update(|cx| {
+        FakeThreadEnvironment::default().with_terminal(FakeTerminalHandle::new_never_exits(cx))
+    }));
+
+    let mut events = thread
+        .update(cx, |thread, cx| {
+            thread.add_tool(crate::TerminalTool::new(
+                thread.project().clone(),
+                environment,
+            ));
+            thread.send(ClientUserMessageId::new(), ["run a command"], cx)
+        })
+        .unwrap();
+
+    cx.run_until_parked();
+
+    fake_model.send_last_completion_stream_event(LanguageModelCompletionEvent::ToolUse(
+        LanguageModelToolUse {
+            id: "terminal_tool_1".into(),
+            name: TerminalTool::NAME.into(),
+            raw_input: r#"{"command": "echo hi", "cd": ".", "blocking": true}"#.into(),
+            input: language_model::LanguageModelToolUseInput::Json(
+                json!({"command": "echo hi", "cd": ".", "blocking": true}),
+            ),
+            is_input_complete: true,
+            thought_signature: None,
+        },
+    ));
+    fake_model.end_last_completion_stream();
+
+    // The tool call event carries the title and arrives before the terminal
+    // starts running.
+    let tool_call = expect_tool_call(&mut events).await;
+    assert_eq!(tool_call.title, "echo hi");
+
+    // Wait for the terminal tool to start running, then cancel the thread so
+    // the never-exiting fake terminal is killed.
+    wait_for_terminal_tool_started(&mut events, cx).await;
+    thread.update(cx, |thread, cx| thread.cancel(cx)).detach();
+    let remaining_events = collect_events_until_stop(&mut events, cx).await;
+    assert_eq!(
+        stop_events(remaining_events),
+        vec![acp::StopReason::Cancelled],
+    );
+}
+
+#[gpui::test]
 async fn test_cancellation_aware_tool_responds_to_cancellation(cx: &mut TestAppContext) {
     // This test verifies that tools which properly handle cancellation via
     // `event_stream.cancelled_by_user()` (like edit_file_tool) respond promptly
