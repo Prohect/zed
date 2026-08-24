@@ -1416,9 +1416,8 @@ impl NativeAgent {
                 // still unwinding; start the native continuation turn only
                 // afterwards, so that cancel lands while the native thread
                 // is idle rather than killing the continuation.
-                let response_stream = cx.update(|cx| {
-                    thread.update(cx, |thread, cx| thread.send_existing(cx))
-                })?;
+                let response_stream =
+                    cx.update(|cx| thread.update(cx, |thread, cx| thread.send_existing(cx)))?;
                 cx.update(|cx| {
                     NativeAgentConnection::handle_thread_events(
                         response_stream,
@@ -1430,7 +1429,8 @@ impl NativeAgent {
                 .await
             })
         });
-        cx.spawn(async move |_, _| turn.await).detach_and_log_err(cx);
+        cx.spawn(async move |_, _| turn.await)
+            .detach_and_log_err(cx);
     }
 
     fn handle_project_event(
