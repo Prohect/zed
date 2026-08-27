@@ -38,9 +38,9 @@ Context variables for tool guidance:
   model_name
   sandboxing
 
-Zed registers three custom helpers: `contains` (list, item),
-`join` (list, separator), and `array` (items...) for building a list
-inline — the template language has no array literal syntax.
+Zed registers six custom helpers: `contains` (list, item),
+`join` (list, separator), `array` (items...) for building a list
+inline, `union` (list1, list2), `intersect` (list1, list2), `differ` (list1, list2).
 
   {{#if (contains available_tools 'grep')}}
   Prefer the `grep` tool for content search.
@@ -48,6 +48,8 @@ inline — the template language has no array literal syntax.
 
   Available tools: {{join available_tools ", "}}
   Platforms: {{join (array "linux" "windows" "macos") " / "}}
+
+  assert {{join (differ (union (array "a" "b" "c") (array "b" "c" "d")) (intersect (array "a" "b" "c") (array "b" "c" "d"))) ", "}} == "a, d"
 
 Partials (imports):
 Every other `*.hbs` file under this directory (recursively) is inplace-appendable by

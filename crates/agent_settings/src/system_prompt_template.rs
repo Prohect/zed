@@ -78,6 +78,9 @@ pub fn render_template(
     handlebars.register_helper("contains", Box::new(contains_helper));
     handlebars.register_helper("join", Box::new(join_helper));
     handlebars.register_helper("array", Box::new(ArrayHelper));
+    handlebars.register_helper("union", Box::new(SetOpHelper::UNION));
+    handlebars.register_helper("intersect", Box::new(SetOpHelper::INTERSECT));
+    handlebars.register_helper("differ", Box::new(SetOpHelper::DIFFER));
     for (name, content) in partials {
         handlebars.register_partial(name, content.as_str())?;
     }
@@ -266,6 +269,104 @@ impl handlebars::HelperDef for ArrayHelper {
                     .map(|param| param.value().clone())
                     .collect(),
             ),
+        ))
+    }
+}
+
+/// Set operation applied by [`SetOpHelper`].
+#[derive(Clone, Copy)]
+enum SetOp {
+    /// Elements in either list.
+    Union,
+    /// Elements in both lists.
+    Intersect,
+    /// Elements of the first list absent from the second.
+    Differ,
+}
+
+impl SetOp {
+    fn name(self) -> &'static str {
+        match self {
+            SetOp::Union => "union",
+            SetOp::Intersect => "intersect",
+            SetOp::Differ => "differ",
+        }
+    }
+
+    fn apply(
+        self,
+        first: &[handlebars::JsonValue],
+        second: &[handlebars::JsonValue],
+    ) -> Vec<handlebars::JsonValue> {
+        let deduped = |values: &[handlebars::JsonValue]| -> Vec<handlebars::JsonValue> {
+            let mut result: Vec<handlebars::JsonValue> = Vec::new();
+            for value in values {
+                if !result.contains(value) {
+                    result.push(value.clone());
+                }
+            }
+            result
+        };
+        match self {
+            SetOp::Union => {
+                deduped(&first.iter().chain(second.iter()).cloned().collect::<Vec<_>>())
+            }
+            SetOp::Intersect => deduped(
+                &first
+                    .iter()
+                    .filter(|value| second.contains(value))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+            SetOp::Differ => deduped(
+                &first
+                    .iter()
+                    .filter(|value| !second.contains(value))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
+        }
+    }
+}
+
+/// Handlebars helper for set operations over two lists:
+/// `{{join (union available_tools (array "grep")) ", "}}` or
+/// `{{#if (intersect available_tools (array "grep"))}}`. Returns a
+/// deduplicated list preserving first-appearance order.
+///
+/// Implemented via `call_inner` (rather than writing to `Output`) so the
+/// result keeps its array type when used as a subexpression — output-writing
+/// helpers degrade to strings there. Also used by the built-in templates in
+/// the `agent` crate.
+#[derive(Clone, Copy)]
+pub struct SetOpHelper(SetOp);
+
+impl SetOpHelper {
+    pub const UNION: Self = Self(SetOp::Union);
+    pub const INTERSECT: Self = Self(SetOp::Intersect);
+    pub const DIFFER: Self = Self(SetOp::Differ);
+}
+
+impl handlebars::HelperDef for SetOpHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &handlebars::Helper<'rc>,
+        _: &'reg handlebars::Handlebars<'reg>,
+        _: &'rc handlebars::Context,
+        _: &mut handlebars::RenderContext<'reg, 'rc>,
+    ) -> Result<handlebars::ScopedJson<'rc>, RenderError> {
+        let name = self.0.name();
+        let list = |index: usize| -> Result<&Vec<handlebars::JsonValue>, RenderError> {
+            h.param(index)
+                .and_then(|value| value.value().as_array())
+                .ok_or_else(|| {
+                    RenderError::from(RenderErrorReason::Other(format!(
+                        "{name}: missing or invalid list parameter {index}"
+                    )))
+                })
+        };
+        Ok(handlebars::ScopedJson::Derived(
+            handlebars::JsonValue::Array(self.0.apply(list(0)?, list(1)?)),
         ))
     }
 }
@@ -566,5 +667,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rendered, "shell,glob,grep");
+    }
+
+    #[test]
+    fn test_union_helper() {
+        let tools = vec![SharedString::from("grep"), SharedString::from("read_file")];
+        let rendered = render_rules_template(
+            "{{join (union available_tools (array \"read_file\" \"glob\")) \", \"}}",
+            &BTreeMap::new(),
+            &context(&tools),
+        )
+        .unwrap();
+        assert_eq!(rendered, "grep, read_file, glob");
+    }
+
+    #[test]
+    fn test_intersect_helper() {
+        let tools = vec![SharedString::from("grep"), SharedString::from("read_file")];
+        let rendered = render_rules_template(
+            "{{join (intersect available_tools (array \"read_file\" \"glob\")) \", \"}}",
+            &BTreeMap::new(),
+            &context(&tools),
+        )
+        .unwrap();
+        assert_eq!(rendered, "read_file");
+        // An empty intersection is falsy in `{{#if}}`, so `intersect` doubles
+        // as a "shares any element" check.
+        let rendered = render_rules_template(
+            "{{#if (intersect available_tools (array \"glob\"))}}yes{{else}}no{{/if}}",
+            &BTreeMap::new(),
+            &context(&tools),
+        )
+        .unwrap();
+        assert_eq!(rendered, "no");
+    }
+
+    #[test]
+    fn test_differ_helper() {
+        let tools = vec![SharedString::from("grep"), SharedString::from("read_file")];
+        let rendered = render_rules_template(
+            "{{join (differ available_tools (array \"grep\")) \", \"}}",
+            &BTreeMap::new(),
+            &context(&tools),
+        )
+        .unwrap();
+        assert_eq!(rendered, "read_file");
+    }
+
+    #[test]
+    fn test_set_op_helpers_deduplicate_preserving_order() {
+        let rendered = render_rules_template(
+            "{{join (union (array \"b\" \"a\" \"b\") (array \"a\" \"c\")) \", \"}}",
+            &BTreeMap::new(),
+            &context(&[]),
+        )
+        .unwrap();
+        assert_eq!(rendered, "b, a, c");
+    }
+
+    #[test]
+    fn test_set_op_helpers_reject_non_list_parameters() {
+        let tools = vec![SharedString::from("grep")];
+        assert!(
+            render_rules_template(
+                "{{union available_tools \"grep\"}}",
+                &BTreeMap::new(),
+                &context(&tools)
+            )
+            .is_err()
+        );
+        assert!(
+            render_rules_template(
+                "{{differ \"grep\" available_tools}}",
+                &BTreeMap::new(),
+                &context(&tools)
+            )
+            .is_err()
+        );
     }
 }

@@ -19,6 +19,12 @@ impl Templates {
         handlebars.register_helper("contains", Box::new(agent_settings::contains_helper));
         handlebars.register_helper("join", Box::new(agent_settings::join_helper));
         handlebars.register_helper("array", Box::new(agent_settings::ArrayHelper));
+        handlebars.register_helper("union", Box::new(agent_settings::SetOpHelper::UNION));
+        handlebars.register_helper(
+            "intersect",
+            Box::new(agent_settings::SetOpHelper::INTERSECT),
+        );
+        handlebars.register_helper("differ", Box::new(agent_settings::SetOpHelper::DIFFER));
         handlebars.register_embed_templates::<Assets>().unwrap();
         Arc::new(Self(handlebars))
     }
