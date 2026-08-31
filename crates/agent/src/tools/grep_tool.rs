@@ -115,8 +115,8 @@ impl AgentTool for GrepTool {
         event_stream: ToolCallEventStream,
         cx: &mut App,
     ) -> Task<Result<Self::Output, Self::Output>> {
-        const CONTEXT_LINES: u32 = 2;
-        const MAX_ANCESTOR_LINES: u32 = 10;
+        const CONTEXT_LINES: u32 = 4;
+        const MAX_ANCESTOR_LINES: u32 = 42;
 
         let project = self.project.clone();
         cx.spawn(async move |cx|  {
