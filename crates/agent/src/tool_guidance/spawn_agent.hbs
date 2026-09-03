@@ -1,4 +1,4 @@
-{{!-- Commented sections below document this tool's fixed API contract — already
+{{!-- Commented sections below document this tool's fixed API contract -- already
 sent with the tool's schema and stripped from the prompt. Keep the guidance
 consistent with them. --}}
 {{!--
@@ -25,7 +25,7 @@ Spawn a sub-agent for a well-scoped task.
 
 ### Restricting subagent tools
 {{!--
-- By default a subagent inherits all of your tools. Pass `tools` to restrict it to an allowlist — for example read-only tools like ["read_file", "grep", "find_path"] for a search task, or an empty list for a pure reasoning task over content in the message.
+- By default a subagent inherits all of your tools. Pass `tools` to restrict it to an allowlist -- for example read-only tools like ["read_file", "grep", "find_path"] for a search task, or an empty list for a pure reasoning task over content in the message.
 --}}
 - A scoped allowlist keeps focused subtasks from performing side effects you did not intend.
 
