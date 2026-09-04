@@ -21,10 +21,15 @@
 //!
 //! Load-time validation rejects malformed templates and missing/cyclic
 //! partials, but unknown variables, unknown helpers, and helper arity
-//! mismatches can only be detected at render time (the full context isn't
-//! available when the file is loaded, and which branches a render takes
-//! depends on it). The renderer therefore falls back to the built-in system
-//! prompt on error and reports the failure back through
+//! mismatches are only detected while rendering. Waiting for a session to
+//! render made those errors appear a turn later than a syntax error in the
+//! very same file, so every load also dry-renders the template against a
+//! synthetic session context supplied by the host (see [`RenderProbe`]) and
+//! treats a failure exactly like a syntax error.
+//!
+//! A probe renders one context, so a section gated on a narrower one is not
+//! covered by it. Those still fall back to the built-in system prompt at
+//! render time and report the failure through
 //! [`SystemPromptTemplate::report_render_error`], which moves the global to
 //! [`SystemPromptTemplateState::Error`] so the host application shows it with
 //! the same UI it uses for load-time errors. Without that report a broken
@@ -391,6 +396,14 @@ pub enum SystemPromptTemplateState {
     Error(SharedString),
 }
 
+/// Dry-renders a candidate template against a synthetic session context, so
+/// errors a template only produces while rendering surface when the file
+/// changes instead of at the start of the next session turn.
+///
+/// Injected by the host: the render context type lives in the `agent` crate,
+/// which depends on this one.
+pub type RenderProbe = Rc<dyn Fn(&SystemPromptTemplateSource) -> anyhow::Result<()>>;
+
 /// A validated `system_prompt.hbs` plus its importable partials.
 #[derive(Debug, Clone)]
 pub struct SystemPromptTemplateSource {
@@ -433,6 +446,10 @@ impl SystemPromptTemplate {
     /// [`SystemPromptTemplateState::Error`] so the host application surfaces
     /// it like a load-time error.
     ///
+    /// The load-time [`RenderProbe`] already rejects a template that fails in
+    /// the context it renders; this is the backstop for sections gated on a
+    /// narrower context than the probe's.
+    ///
     /// Queued rather than applied directly because the render happens while
     /// a completion request is being built, behind a `&App` that cannot
     /// update globals. The state change also stops later requests from
@@ -447,17 +464,20 @@ impl SystemPromptTemplate {
 ///
 /// Watches the config directory for changes to `system_prompt.hbs` or any
 /// sibling `*.hbs` partial and updates the [`SystemPromptTemplate`] global
-/// accordingly. The `on_change` callback is invoked on the foreground thread
-/// whenever a new load completes, so callers can show or dismiss notifications
-/// matching the settings/keymap-error UI.
+/// accordingly. Each load runs `probe` over the candidate template, so a
+/// template that only breaks while rendering is rejected on the same file
+/// change that a syntax error would be. The `on_change` callback is invoked on
+/// the foreground thread whenever a new load completes, so callers can show or
+/// dismiss notifications matching the settings/keymap-error UI.
 pub fn init(
     fs: Arc<dyn Fs>,
     cx: &mut App,
+    probe: impl Fn(&SystemPromptTemplateSource) -> anyhow::Result<()> + 'static,
     on_change: impl Fn(&SystemPromptTemplateState, &mut App) + 'static,
 ) {
     let on_change = Rc::new(on_change);
     let (render_errors, render_error_reports) = mpsc::unbounded();
-    let watcher = spawn_watcher(fs, cx, on_change.clone());
+    let watcher = spawn_watcher(fs, Rc::new(probe), cx, on_change.clone());
     let render_error_reporter = spawn_render_error_reporter(render_error_reports, cx, on_change);
     cx.set_global(SystemPromptTemplate {
         state: SystemPromptTemplateState::default(),
@@ -487,6 +507,7 @@ fn spawn_render_error_reporter(
 
 fn spawn_watcher(
     fs: Arc<dyn Fs>,
+    probe: RenderProbe,
     cx: &mut App,
     on_change: Rc<impl Fn(&SystemPromptTemplateState, &mut App) + 'static>,
 ) -> Task<()> {
@@ -503,7 +524,7 @@ fn spawn_watcher(
         let (events, watcher) = fs.watch(&config_dir, Duration::from_millis(100)).await;
         futures::pin_mut!(events);
 
-        let (mut state, mut scanned_dirs) = load_template_state(&fs).await;
+        let (mut state, mut scanned_dirs) = load_template_state(&fs, &probe).await;
         loop {
             for dir in &scanned_dirs {
                 watcher.add(dir).log_err();
@@ -528,12 +549,15 @@ fn spawn_watcher(
                         && event.path.extension().and_then(|ext| ext.to_str()) == Some("hbs")
                 });
             }
-            (state, scanned_dirs) = load_template_state(&fs).await;
+            (state, scanned_dirs) = load_template_state(&fs, &probe).await;
         }
     })
 }
 
-async fn load_template_state(fs: &Arc<dyn Fs>) -> (SystemPromptTemplateState, Vec<PathBuf>) {
+async fn load_template_state(
+    fs: &Arc<dyn Fs>,
+    probe: &RenderProbe,
+) -> (SystemPromptTemplateState, Vec<PathBuf>) {
     let (partials, scanned_dirs) = load_partials(fs.as_ref()).await;
     let state = 'state: {
         let raw = match fs.load(paths::system_prompt_template_file()).await {
@@ -552,11 +576,15 @@ async fn load_template_state(fs: &Arc<dyn Fs>) -> (SystemPromptTemplateState, Ve
         if raw.trim().is_empty() {
             break 'state SystemPromptTemplateState::Empty;
         }
-        match validate_template(&raw, &partials) {
-            Ok(()) => SystemPromptTemplateState::Loaded(SystemPromptTemplateSource {
-                source: SharedString::from(raw),
-                partials: Arc::new(partials),
-            }),
+        if let Err(err) = validate_template(&raw, &partials) {
+            break 'state SystemPromptTemplateState::Error(SharedString::from(format!("{err:#}")));
+        }
+        let source = SystemPromptTemplateSource {
+            source: SharedString::from(raw),
+            partials: Arc::new(partials),
+        };
+        match probe(&source) {
+            Ok(()) => SystemPromptTemplateState::Loaded(source),
             Err(err) => SystemPromptTemplateState::Error(SharedString::from(format!("{err:#}"))),
         }
     };
@@ -612,13 +640,19 @@ async fn load_partials(fs: &dyn Fs) -> (BTreeMap<String, String>, Vec<PathBuf>) 
     (partials, dirs)
 }
 
-/// Rejects syntax errors, missing partials, and partial import cycles at load
-/// time. Unknown variables, unknown helpers, and helper arity mismatches can
-/// only be caught when the full session context is available, so those reach
-/// the state via [`SystemPromptTemplate::report_render_error`] instead.
+/// Rejects syntax errors, missing partials, and partial import cycles before
+/// the [`RenderProbe`] runs, so a broken template is reported by its own
+/// error rather than by whatever the probe's render made of it.
 fn validate_template(source: &str, partials: &BTreeMap<String, String>) -> anyhow::Result<()> {
     let entrypoint = Template::compile(source)?;
-    check_partial_graph(&entrypoint, partials)?;
+    // The renderer registers the `AGENTS.md` content under this name, so it
+    // is importable even though it is not one of the config directory's
+    // `*.hbs` files.
+    let mut partials = partials.clone();
+    partials
+        .entry(AGENTS_MD_PARTIAL_NAME.to_string())
+        .or_default();
+    check_partial_graph(&entrypoint, &partials)?;
     Ok(())
 }
 
@@ -792,10 +826,133 @@ mod tests {
         );
     }
 
-    /// A template that loads and validates but fails to render must not stay
-    /// in [`SystemPromptTemplateState::Loaded`]: the session already fell
-    /// back to the built-in prompt, and leaving the state as loaded is what
-    /// made a broken override look like no override at all.
+    /// The probe the watcher tests use: the same strict registry the real
+    /// probe renders with, over the context this crate can build on its own.
+    fn probe(source: &SystemPromptTemplateSource) -> anyhow::Result<()> {
+        let tools = [SharedString::from("grep")];
+        render_template(&source.source, &source.partials, &context(&tools)).map(|_| ())
+    }
+
+    /// The whole point of the probe: an error that a template only produces
+    /// while rendering must reach the user on the change that introduced it,
+    /// like a syntax error in the same file does — not one session turn
+    /// later.
+    #[gpui::test]
+    async fn render_error_is_reported_when_the_file_changes(cx: &mut gpui::TestAppContext) {
+        cx.executor().allow_parking();
+        let fs = fs::FakeFs::new(cx.executor());
+        let config_dir = paths::system_prompt_template_file()
+            .parent()
+            .expect("system_prompt.hbs path should have a parent")
+            .to_path_buf();
+        fs.create_dir(&config_dir).await.unwrap();
+
+        cx.update(|cx| init(fs.clone(), cx, probe, |_state, _cx| {}));
+        // Compiles and references no partial, so load-time validation accepts
+        // it; only a render rejects the unknown helper.
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"{{frobnicate available_tools}}".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let template = SystemPromptTemplate::global(cx).expect("global should be set");
+            assert!(
+                matches!(template.state(), SystemPromptTemplateState::Error(message)
+                    if message.contains("frobnicate")),
+                "expected an error naming the unknown helper, got {:?}",
+                template.state()
+            );
+            assert!(template.source().is_none());
+        });
+
+        // Strict mode makes an unknown variable a render error too.
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"{{missing}}".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let template = SystemPromptTemplate::global(cx).expect("global should be set");
+            assert!(
+                matches!(template.state(), SystemPromptTemplateState::Error(_)),
+                "expected an error, got {:?}",
+                template.state()
+            );
+        });
+
+        // A template the probe renders is loaded, error cleared.
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"{{join available_tools \", \"}}".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                SystemPromptTemplate::global(cx)
+                    .and_then(|template| template.source())
+                    .is_some(),
+                "a template that renders should load"
+            );
+        });
+    }
+
+    /// `{{> agents_md}}` is the documented way to splice the user's
+    /// `AGENTS.md` into an override, and the renderer registers it under that
+    /// name. Load-time validation sees only the config directory's `*.hbs`
+    /// files, so it has to know about that partial too, or it rejects the
+    /// template before the probe ever renders it.
+    #[gpui::test]
+    async fn agents_md_partial_is_known_at_load_time(cx: &mut gpui::TestAppContext) {
+        cx.executor().allow_parking();
+        let fs = fs::FakeFs::new(cx.executor());
+        let config_dir = paths::system_prompt_template_file()
+            .parent()
+            .expect("system_prompt.hbs path should have a parent")
+            .to_path_buf();
+        fs.create_dir(&config_dir).await.unwrap();
+
+        cx.update(|cx| {
+            init(
+                fs.clone(),
+                cx,
+                // Mirrors the real probe, which registers the `AGENTS.md`
+                // content under this name before rendering.
+                |source| {
+                    let mut partials = (*source.partials).clone();
+                    partials.insert(
+                        AGENTS_MD_PARTIAL_NAME.to_string(),
+                        "personal rules body".to_string(),
+                    );
+                    render_template(&source.source, &partials, &context(&[])).map(|_| ())
+                },
+                |_state, _cx| {},
+            );
+        });
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"{{> agents_md}}".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let template = SystemPromptTemplate::global(cx).expect("global should be set");
+            assert!(
+                template.source().is_some(),
+                "a template importing the AGENTS.md partial should load, got {:?}",
+                template.state()
+            );
+        });
+    }
+
+    /// A template that the probe renders but a narrower session context
+    /// breaks must not stay in [`SystemPromptTemplateState::Loaded`]: the
+    /// session already fell back to the built-in prompt, and leaving the
+    /// state as loaded is what made a broken override look like no override
+    /// at all.
     #[gpui::test]
     async fn reported_render_error_becomes_error_state(cx: &mut gpui::TestAppContext) {
         cx.executor().allow_parking();
@@ -808,13 +965,19 @@ mod tests {
 
         let history: Rc<RefCell<Vec<SystemPromptTemplateState>>> = Rc::new(RefCell::new(vec![]));
         cx.update(|cx| {
-            init(fs.clone(), cx, {
-                let history = history.clone();
-                move |state, _cx| history.borrow_mut().push(state.clone())
-            });
+            init(
+                fs.clone(),
+                cx,
+                // Structure-only, standing in for a probe whose context does
+                // render this template; what is under test is the report that
+                // arrives afterwards.
+                |source| validate_template(&source.source, &source.partials),
+                {
+                    let history = history.clone();
+                    move |state, _cx| history.borrow_mut().push(state.clone())
+                },
+            );
         });
-        // `{{missing}}` compiles and references no partial, so load-time
-        // validation accepts it; only a render can reject it.
         fs.insert_file(
             paths::system_prompt_template_file(),
             b"{{missing}}".to_vec(),

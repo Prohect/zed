@@ -1,3 +1,4 @@
+use agent_skills::SkillSummary;
 use anyhow::Result;
 use gpui::SharedString;
 use handlebars::Handlebars;
@@ -124,6 +125,97 @@ fn render_user_system_prompt(
             .to_string(),
     );
     agent_settings::render_template(source.source.as_ref(), &partials, context)
+}
+
+/// A synthetic session context to dry-render a `system_prompt.hbs` override
+/// against, so errors that a template only produces while rendering —
+/// unknown variables, unknown helpers, helper arity mismatches — are found
+/// when the file changes rather than at the start of the next session turn.
+/// Reporting a helper error a turn later than a syntax error in the same file
+/// is the inconsistency this exists to remove.
+///
+/// Owns the [`prompt_store::ProjectContext`] that
+/// [`SystemPromptTemplateContext`] borrows.
+pub struct SystemPromptProbe {
+    project: prompt_store::ProjectContext,
+    available_tools: Vec<SharedString>,
+}
+
+impl SystemPromptProbe {
+    /// Every context value that would otherwise be a coin flip is fixed at
+    /// its "most content" setting — sandboxing on, a worktree with a rules
+    /// file, a skill, an `AGENTS.md` — so a single render reaches as many
+    /// gated sections as possible. Sections gated on a *narrower* context
+    /// than this one are not rendered, so a clean probe is not proof that
+    /// every branch renders; those still reach the user through
+    /// [`render_system_prompt`]'s report.
+    pub fn new(available_tools: Vec<SharedString>) -> Self {
+        let worktrees = vec![prompt_store::WorktreeContext {
+            root_name: "my-project".to_string(),
+            abs_path: std::path::Path::new("/path/to/my-project").into(),
+            rules_file: Some(prompt_store::RulesFileContext {
+                path_in_worktree: util::rel_path::RelPath::from_unix_str("AGENTS.md")
+                    .unwrap_or(util::rel_path::RelPath::empty())
+                    .into(),
+                text: "project rules body".to_string(),
+                project_entry_id: 0,
+            }),
+        }];
+        let project =
+            prompt_store::ProjectContext::new(worktrees).with_skills(vec![SkillSummary {
+                name: "example-skill".to_string(),
+                description: "An example skill.".to_string(),
+                location: "/path/to/skills/example-skill/SKILL.md".to_string(),
+            }]);
+        Self {
+            project,
+            available_tools,
+        }
+    }
+
+    /// Probes with every built-in tool available, since a template can gate a
+    /// section on any of them.
+    pub fn with_built_in_tools() -> Self {
+        Self::new(
+            crate::tools::built_in_tools()
+                .map(|tool| SharedString::from(tool.name))
+                .collect(),
+        )
+    }
+
+    pub fn context(&self) -> SystemPromptTemplateContext<'_> {
+        SystemPromptTemplateContext {
+            project: &self.project,
+            available_tools: self.available_tools.clone(),
+            model_name: Some("Example Model".to_string()),
+            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            user_agents_md: Some("personal rules body".into()),
+            sandboxing: true,
+            is_linux: cfg!(target_os = "linux"),
+            is_windows: cfg!(target_os = "windows"),
+            is_macos: cfg!(target_os = "macos"),
+        }
+    }
+
+    pub fn render(
+        &self,
+        source: &agent_settings::SystemPromptTemplateSource,
+    ) -> anyhow::Result<String> {
+        render_user_system_prompt(source, &self.context())
+    }
+}
+
+/// Dry-renders a candidate `system_prompt.hbs` the way a session would.
+///
+/// Handed to the `system_prompt.hbs` watcher in `agent_settings`, which can't
+/// build a [`SystemPromptTemplateContext`] itself: the context type lives
+/// here, in a crate that depends on it.
+pub fn probe_user_system_prompt(
+    source: &agent_settings::SystemPromptTemplateSource,
+) -> anyhow::Result<()> {
+    SystemPromptProbe::with_built_in_tools()
+        .render(source)
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -421,6 +513,35 @@ mod tests {
         assert!(!rendered.contains("Rules title:"));
     }
 
+    /// The agent menu materializes [`BUILT_IN_SYSTEM_PROMPT`] into
+    /// `system_prompt.hbs` when a user first opens the override, so a probe
+    /// context too thin to render it would reject the override the moment it
+    /// was created. Rendering it is what keeps the synthetic context honest
+    /// about what a session provides.
+    #[test]
+    fn probe_renders_the_built_in_system_prompt() {
+        let source = agent_settings::SystemPromptTemplateSource {
+            source: SharedString::from(BUILT_IN_SYSTEM_PROMPT),
+            partials: Arc::new(std::collections::BTreeMap::new()),
+        };
+        probe_user_system_prompt(&source).expect("the built-in prompt should probe cleanly");
+    }
+
+    /// A helper typo used to survive every file change and fail only once a
+    /// session rendered the template, a turn after a syntax error in the same
+    /// file would have been reported. The probe is what pulls it forward to
+    /// the change that introduced it.
+    #[test]
+    fn probe_rejects_a_template_that_only_fails_while_rendering() {
+        let source = agent_settings::SystemPromptTemplateSource {
+            source: SharedString::from("{{frobnicate available_tools}}"),
+            partials: Arc::new(std::collections::BTreeMap::new()),
+        };
+        let error =
+            probe_user_system_prompt(&source).expect_err("an unknown helper should fail the probe");
+        assert!(format!("{error:#}").contains("frobnicate"), "{error:#}");
+    }
+
     /// Renders a `system_prompt.hbs` override exactly the way a session does
     /// and prints the result, so a template can be checked from the CLI
     /// without starting Zed. A render error fails the test with the message a
@@ -442,20 +563,14 @@ mod tests {
     /// - `ZED_SYSTEM_PROMPT_TOOLS`: comma-separated `available_tools`
     ///   (default: every built-in tool).
     ///
-    /// Context values that would need one environment variable each are
-    /// fixed at their "most content" setting — sandboxing on, a worktree
-    /// with a rules file, a skill, an `AGENTS.md` — so a single pass covers
-    /// as many gated sections as possible. Sections gated on a *narrower*
-    /// context than this one are not rendered, so a clean run is not a proof
-    /// that every branch renders.
+    /// Context values that would need one environment variable each come
+    /// from [`SystemPromptProbe`], the same synthetic context the watcher
+    /// dry-renders against — so this prints what the probe checks.
     #[test]
     #[ignore = "rendering utility, not a test"]
     fn render_system_prompt_template_file() {
-        use agent_skills::SkillSummary;
-        use prompt_store::{ProjectContext, RulesFileContext, WorktreeContext};
         use std::collections::BTreeMap;
         use std::path::{Path, PathBuf};
-        use util::rel_path::RelPath;
 
         /// Mirrors `agent_settings`' partial collection: every `*.hbs` file
         /// under `root` except the entrypoint, named by its relative path
@@ -519,31 +634,7 @@ mod tests {
                 .collect(),
         };
 
-        let worktrees = vec![WorktreeContext {
-            root_name: "my-project".to_string(),
-            abs_path: Path::new("/path/to/my-project").into(),
-            rules_file: Some(RulesFileContext {
-                path_in_worktree: RelPath::from_unix_str("AGENTS.md").unwrap().into(),
-                text: "project rules body".to_string(),
-                project_entry_id: 0,
-            }),
-        }];
-        let project = ProjectContext::new(worktrees).with_skills(vec![SkillSummary {
-            name: "example-skill".to_string(),
-            description: "An example skill.".to_string(),
-            location: "/path/to/skills/example-skill/SKILL.md".to_string(),
-        }]);
-        let context = SystemPromptTemplateContext {
-            project: &project,
-            available_tools: available_tools.clone(),
-            model_name: Some("Example Model".to_string()),
-            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-            user_agents_md: Some("personal rules body".into()),
-            sandboxing: true,
-            is_linux: cfg!(target_os = "linux"),
-            is_windows: cfg!(target_os = "windows"),
-            is_macos: cfg!(target_os = "macos"),
-        };
+        let probe = SystemPromptProbe::new(available_tools.clone());
 
         eprintln!("template: {}", path.display());
         eprintln!(
@@ -560,7 +651,7 @@ mod tests {
             source: SharedString::from(template),
             partials: Arc::new(partials),
         };
-        match render_user_system_prompt(&source, &context) {
+        match probe.render(&source) {
             Ok(rendered) => {
                 eprintln!("rendered {} bytes\n", rendered.len());
                 println!("{rendered}");
