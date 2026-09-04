@@ -20,20 +20,27 @@
 //! condition the session's behavior on its tool set.
 //!
 //! Load-time validation rejects malformed templates and missing/cyclic
-//! partials, but strict-mode unknown variables can only be detected at render
-//! time (the full context isn't available when the file is loaded). The
-//! renderer therefore falls back to the built-in system prompt on error and
-//! surfaces the failure via [`SystemPromptTemplateState::Error`] so the host
-//! application can show it with the same UI it uses for settings/keymap
-//! errors.
+//! partials, but unknown variables, unknown helpers, and helper arity
+//! mismatches can only be detected at render time (the full context isn't
+//! available when the file is loaded, and which branches a render takes
+//! depends on it). The renderer therefore falls back to the built-in system
+//! prompt on error and reports the failure back through
+//! [`SystemPromptTemplate::report_render_error`], which moves the global to
+//! [`SystemPromptTemplateState::Error`] so the host application shows it with
+//! the same UI it uses for load-time errors. Without that report a broken
+//! override is indistinguishable from having no override at all: every
+//! session silently uses the built-in prompt while the UI still reports the
+//! file as loaded.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use fs::Fs;
 use futures::StreamExt as _;
+use futures::channel::mpsc;
 use gpui::{App, BorrowAppContext, Global, SharedString, Task};
 use handlebars::template::TemplateElement;
 use handlebars::{Handlebars, RenderError, RenderErrorReason, Template};
@@ -395,10 +402,12 @@ pub struct SystemPromptTemplateSource {
 }
 
 /// Global wrapper that owns the current [`SystemPromptTemplateState`] plus the
-/// watcher task responsible for keeping it up to date.
+/// tasks responsible for keeping it up to date.
 pub struct SystemPromptTemplate {
     state: SystemPromptTemplateState,
+    render_errors: mpsc::UnboundedSender<SharedString>,
     _watcher: Task<()>,
+    _render_error_reporter: Task<()>,
 }
 
 impl Global for SystemPromptTemplate {}
@@ -419,6 +428,19 @@ impl SystemPromptTemplate {
             SystemPromptTemplateState::Empty | SystemPromptTemplateState::Error(_) => None,
         }
     }
+
+    /// Reports that rendering the loaded template failed, moving the state to
+    /// [`SystemPromptTemplateState::Error`] so the host application surfaces
+    /// it like a load-time error.
+    ///
+    /// Queued rather than applied directly because the render happens while
+    /// a completion request is being built, behind a `&App` that cannot
+    /// update globals. The state change also stops later requests from
+    /// retrying a template that is known to fail, and the watcher restores
+    /// the template as soon as the file is edited again.
+    pub fn report_render_error(&self, message: impl Into<SharedString>) {
+        self.render_errors.unbounded_send(message.into()).log_err();
+    }
 }
 
 /// Initialize the user-global `system_prompt.hbs` watcher.
@@ -433,17 +455,40 @@ pub fn init(
     cx: &mut App,
     on_change: impl Fn(&SystemPromptTemplateState, &mut App) + 'static,
 ) {
-    let watcher = spawn_watcher(fs, cx, on_change);
+    let on_change = Rc::new(on_change);
+    let (render_errors, render_error_reports) = mpsc::unbounded();
+    let watcher = spawn_watcher(fs, cx, on_change.clone());
+    let render_error_reporter = spawn_render_error_reporter(render_error_reports, cx, on_change);
     cx.set_global(SystemPromptTemplate {
         state: SystemPromptTemplateState::default(),
+        render_errors,
         _watcher: watcher,
+        _render_error_reporter: render_error_reporter,
     });
+}
+
+fn spawn_render_error_reporter(
+    mut reports: mpsc::UnboundedReceiver<SharedString>,
+    cx: &mut App,
+    on_change: Rc<impl Fn(&SystemPromptTemplateState, &mut App) + 'static>,
+) -> Task<()> {
+    cx.spawn(async move |cx| {
+        while let Some(message) = reports.next().await {
+            let state = SystemPromptTemplateState::Error(message);
+            cx.update(|cx| {
+                cx.update_global::<SystemPromptTemplate, _>(|template, _| {
+                    template.state = state.clone();
+                });
+                on_change(&state, cx);
+            });
+        }
+    })
 }
 
 fn spawn_watcher(
     fs: Arc<dyn Fs>,
     cx: &mut App,
-    on_change: impl Fn(&SystemPromptTemplateState, &mut App) + 'static,
+    on_change: Rc<impl Fn(&SystemPromptTemplateState, &mut App) + 'static>,
 ) -> Task<()> {
     let config_dir = paths::system_prompt_template_file()
         .parent()
@@ -568,9 +613,9 @@ async fn load_partials(fs: &dyn Fs) -> (BTreeMap<String, String>, Vec<PathBuf>) 
 }
 
 /// Rejects syntax errors, missing partials, and partial import cycles at load
-/// time. Strict-mode unknown-variable errors can only be caught when the full
-/// session context is available, so those fall through to the renderer's
-/// built-in-template fallback.
+/// time. Unknown variables, unknown helpers, and helper arity mismatches can
+/// only be caught when the full session context is available, so those reach
+/// the state via [`SystemPromptTemplate::report_render_error`] instead.
 fn validate_template(source: &str, partials: &BTreeMap<String, String>) -> anyhow::Result<()> {
     let entrypoint = Template::compile(source)?;
     check_partial_graph(&entrypoint, partials)?;
@@ -580,6 +625,7 @@ fn validate_template(source: &str, partials: &BTreeMap<String, String>) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     fn context(available_tools: &[SharedString]) -> RulesTemplateContext<'_> {
         RulesTemplateContext {
@@ -744,5 +790,83 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A template that loads and validates but fails to render must not stay
+    /// in [`SystemPromptTemplateState::Loaded`]: the session already fell
+    /// back to the built-in prompt, and leaving the state as loaded is what
+    /// made a broken override look like no override at all.
+    #[gpui::test]
+    async fn reported_render_error_becomes_error_state(cx: &mut gpui::TestAppContext) {
+        cx.executor().allow_parking();
+        let fs = fs::FakeFs::new(cx.executor());
+        let config_dir = paths::system_prompt_template_file()
+            .parent()
+            .expect("system_prompt.hbs path should have a parent")
+            .to_path_buf();
+        fs.create_dir(&config_dir).await.unwrap();
+
+        let history: Rc<RefCell<Vec<SystemPromptTemplateState>>> = Rc::new(RefCell::new(vec![]));
+        cx.update(|cx| {
+            init(fs.clone(), cx, {
+                let history = history.clone();
+                move |state, _cx| history.borrow_mut().push(state.clone())
+            });
+        });
+        // `{{missing}}` compiles and references no partial, so load-time
+        // validation accepts it; only a render can reject it.
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"{{missing}}".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                SystemPromptTemplate::global(cx)
+                    .and_then(|template| template.source())
+                    .is_some(),
+                "a syntactically valid template should load"
+            );
+            SystemPromptTemplate::global(cx)
+                .expect("global should be set")
+                .report_render_error("unknown variable `missing`");
+        });
+
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let template = SystemPromptTemplate::global(cx).expect("global should be set");
+            assert!(
+                matches!(template.state(), SystemPromptTemplateState::Error(message)
+                    if message.contains("unknown variable")),
+            );
+            assert!(
+                template.source().is_none(),
+                "a template known to fail rendering should not be retried"
+            );
+        });
+        assert!(
+            matches!(
+                history.borrow().last(),
+                Some(SystemPromptTemplateState::Error(_))
+            ),
+            "the host application must be told, so it can show the error"
+        );
+
+        // Editing the file clears the error without restarting Zed.
+        fs.insert_file(
+            paths::system_prompt_template_file(),
+            b"fixed template".to_vec(),
+        )
+        .await;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                SystemPromptTemplate::global(cx)
+                    .and_then(|template| template.source())
+                    .is_some(),
+                "a reloaded template should be used again"
+            );
+        });
     }
 }

@@ -2200,7 +2200,9 @@ pub fn watch_user_agents_md(fs: Arc<dyn fs::Fs>, cx: &mut App) {
 ///
 /// The template itself is loaded into [`agent_settings::SystemPromptTemplate`]
 /// and rendered per session; an invalid template falls back to the built-in
-/// system prompt.
+/// system prompt. Failures reported by the renderer arrive through the same
+/// callback, so an override that only breaks at render time is surfaced here
+/// too rather than silently degrading to the built-in prompt.
 pub fn watch_system_prompt_template(fs: Arc<dyn fs::Fs>, cx: &mut App) {
     struct SystemPromptTemplateError;
     let notification_id = NotificationId::unique::<SystemPromptTemplateError>();
@@ -2211,7 +2213,7 @@ pub fn watch_system_prompt_template(fs: Arc<dyn fs::Fs>, cx: &mut App) {
         }
         SystemPromptTemplateState::Error(message) => {
             let path = paths::system_prompt_template_file().display().to_string();
-            log::error!("Failed to load user system_prompt.hbs from {path}: {message}");
+            log::error!("Unusable user system_prompt.hbs at {path}: {message}");
             let body = format!(
                 "Failed to render {path}\n{message}\n\nFalling back to the built-in system prompt."
             );

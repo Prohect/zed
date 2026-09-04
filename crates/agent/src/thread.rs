@@ -4889,7 +4889,7 @@ impl Thread {
         let sandboxing =
             crate::sandboxing::sandboxing_enabled_for_project(self.project.read(cx), cx);
 
-        let user_template = SystemPromptTemplate::global(cx).and_then(|t| t.source());
+        let user_template = SystemPromptTemplate::global(cx);
         let context = SystemPromptTemplateContext {
             project: self.project_context.read(cx),
             available_tools,

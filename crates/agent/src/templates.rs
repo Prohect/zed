@@ -80,20 +80,28 @@ pub const BUILT_IN_SYSTEM_PROMPT: &str = include_str!("templates/system_prompt.h
 
 /// Renders the system prompt, preferring the user's `system_prompt.hbs`
 /// override when one is loaded. A failed user template falls back to the
-/// built-in template rather than breaking the session.
+/// built-in template rather than breaking the session, and the failure is
+/// reported back to the global so the host application can show it: a render
+/// error that only reached the log would be invisible, leaving the session
+/// behaving as if no override existed while the UI still reported the file as
+/// loaded.
 pub fn render_system_prompt(
     context: &SystemPromptTemplateContext,
     templates: &Templates,
-    user_template: Option<&agent_settings::SystemPromptTemplateSource>,
+    user_template: Option<&agent_settings::SystemPromptTemplate>,
 ) -> anyhow::Result<String> {
-    if let Some(source) = user_template {
+    if let Some(template) = user_template
+        && let Some(source) = template.source()
+    {
         match render_user_system_prompt(source, context) {
             Ok(rendered) => return Ok(rendered),
             Err(err) => {
+                let message = format!("{err:#}");
                 log::error!(
-                    "Failed to render user system prompt template {}: {err:#}",
+                    "Failed to render user system prompt template {}: {message}",
                     paths::system_prompt_template_file().display()
                 );
+                template.report_render_error(message);
             }
         }
     }
@@ -411,5 +419,158 @@ mod tests {
 
         assert!(!rendered.contains("The user has specified the following rules"));
         assert!(!rendered.contains("Rules title:"));
+    }
+
+    /// Renders a `system_prompt.hbs` override exactly the way a session does
+    /// and prints the result, so a template can be checked from the CLI
+    /// without starting Zed. A render error fails the test with the message a
+    /// session would otherwise only write to the log before falling back to
+    /// the built-in prompt.
+    ///
+    /// Skipped by default; run manually with:
+    ///
+    /// ```sh
+    /// cargo test -p agent render_system_prompt_template_file -- --ignored --nocapture
+    /// ```
+    ///
+    /// Renders the real `system_prompt.hbs` override path by default. The
+    /// inputs can be pointed elsewhere with:
+    ///
+    /// - `ZED_SYSTEM_PROMPT_TEMPLATE`: the template file to render. Every
+    ///   other `*.hbs` file under its directory is registered as a partial,
+    ///   as in the config directory.
+    /// - `ZED_SYSTEM_PROMPT_TOOLS`: comma-separated `available_tools`
+    ///   (default: every built-in tool).
+    ///
+    /// Context values that would need one environment variable each are
+    /// fixed at their "most content" setting — sandboxing on, a worktree
+    /// with a rules file, a skill, an `AGENTS.md` — so a single pass covers
+    /// as many gated sections as possible. Sections gated on a *narrower*
+    /// context than this one are not rendered, so a clean run is not a proof
+    /// that every branch renders.
+    #[test]
+    #[ignore = "rendering utility, not a test"]
+    fn render_system_prompt_template_file() {
+        use agent_skills::SkillSummary;
+        use prompt_store::{ProjectContext, RulesFileContext, WorktreeContext};
+        use std::collections::BTreeMap;
+        use std::path::{Path, PathBuf};
+        use util::rel_path::RelPath;
+
+        /// Mirrors `agent_settings`' partial collection: every `*.hbs` file
+        /// under `root` except the entrypoint, named by its relative path
+        /// without the extension, `/`-separated on every platform.
+        fn collect_partials(
+            root: &Path,
+            dir: &Path,
+            entrypoint: &Path,
+            partials: &mut BTreeMap<String, String>,
+        ) -> anyhow::Result<()> {
+            for entry in std::fs::read_dir(dir)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    collect_partials(root, &path, entrypoint, partials)?;
+                    continue;
+                }
+                if path == entrypoint {
+                    continue;
+                }
+                let Some(name) = path
+                    .strip_prefix(root)
+                    .ok()
+                    .and_then(|relative| relative.to_str())
+                    .map(|relative| relative.replace('\\', "/"))
+                    .and_then(|relative| {
+                        relative.strip_suffix(".hbs").map(ToString::to_string)
+                    })
+                    .filter(|name| !name.is_empty())
+                else {
+                    continue;
+                };
+                partials.insert(name, std::fs::read_to_string(&path)?);
+            }
+            Ok(())
+        }
+
+        let path = std::env::var("ZED_SYSTEM_PROMPT_TEMPLATE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| paths::system_prompt_template_file().clone());
+        let path = std::fs::canonicalize(&path)
+            .unwrap_or_else(|err| panic!("failed to resolve {}: {err}", path.display()));
+        let template = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let directory = path
+            .parent()
+            .unwrap_or_else(|| panic!("{} should have a parent", path.display()));
+
+        let mut partials = BTreeMap::new();
+        collect_partials(directory, directory, &path, &mut partials)
+            .unwrap_or_else(|err| panic!("failed to collect partials: {err}"));
+
+        let available_tools: Vec<SharedString> = match std::env::var("ZED_SYSTEM_PROMPT_TOOLS") {
+            Ok(tools) => tools
+                .split(',')
+                .map(str::trim)
+                .filter(|tool| !tool.is_empty())
+                .map(SharedString::from)
+                .collect(),
+            Err(_) => crate::tools::built_in_tools()
+                .map(|tool| SharedString::from(tool.name))
+                .collect(),
+        };
+
+        let worktrees = vec![WorktreeContext {
+            root_name: "my-project".to_string(),
+            abs_path: Path::new("/path/to/my-project").into(),
+            rules_file: Some(RulesFileContext {
+                path_in_worktree: RelPath::from_unix_str("AGENTS.md").unwrap().into(),
+                text: "project rules body".to_string(),
+                project_entry_id: 0,
+            }),
+        }];
+        let project = ProjectContext::new(worktrees).with_skills(vec![SkillSummary {
+            name: "example-skill".to_string(),
+            description: "An example skill.".to_string(),
+            location: "/path/to/skills/example-skill/SKILL.md".to_string(),
+        }]);
+        let context = SystemPromptTemplateContext {
+            project: &project,
+            available_tools: available_tools.clone(),
+            model_name: Some("Example Model".to_string()),
+            date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+            user_agents_md: Some("personal rules body".into()),
+            sandboxing: true,
+            is_linux: cfg!(target_os = "linux"),
+            is_windows: cfg!(target_os = "windows"),
+            is_macos: cfg!(target_os = "macos"),
+        };
+
+        eprintln!("template: {}", path.display());
+        eprintln!(
+            "partials: {}",
+            if partials.is_empty() {
+                "(none)".to_string()
+            } else {
+                partials.keys().cloned().collect::<Vec<_>>().join(", ")
+            }
+        );
+        eprintln!("available_tools: {}", available_tools.join(", "));
+
+        let source = agent_settings::SystemPromptTemplateSource {
+            source: SharedString::from(template),
+            partials: Arc::new(partials),
+        };
+        match render_user_system_prompt(&source, &context) {
+            Ok(rendered) => {
+                eprintln!("rendered {} bytes\n", rendered.len());
+                println!("{rendered}");
+            }
+            Err(err) => panic!(
+                "failed to render {}: {err:#}\n\n\
+                 A session hitting this error falls back to the built-in \
+                 system prompt.",
+                path.display()
+            ),
+        }
     }
 }
