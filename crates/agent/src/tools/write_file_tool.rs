@@ -17,35 +17,9 @@ use ui::SharedString;
 
 const DEFAULT_UI_TEXT: &str = "Writing file";
 
-/// This is a tool for creating a new file or overwriting an existing file with completely new contents.
-///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WriteFileToolInput {
-    /// The full path of the file to create or overwrite in the project.
-    ///
-    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.agents/skills`.
-    ///
-    /// The following examples assume we have two root directories in the project:
-    /// - /a/b/backend
-    /// - /c/d/frontend
-    ///
-    /// <example>
-    /// `backend/src/main.rs`
-    ///
-    /// Notice how the file path starts with `backend`. Without that, the path would be ambiguous and the call would fail!
-    /// </example>
-    ///
-    /// <example>
-    /// `frontend/db.js`
-    /// </example>
-    ///
-    /// <example>
-    /// To create or overwrite a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
-    /// </example>
     pub path: PathBuf,
-
-    /// The entire content for the file.
     pub content: String,
 }
 

@@ -147,33 +147,11 @@ use super::tool_permissions::{
 };
 use crate::{AgentTool, ProjectScope, ToolCallEventStream, ToolInput, outline};
 
-/// Reads the content of the given file in the project.
-///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFileToolInput {
-    /// The relative path of the file to read.
-    ///
-    /// This path should never be absolute, and the first component of the path should always be a root directory in a project, unless it's a global agent skill under `~/.agents/skills`.
-    ///
-    /// <example>
-    /// If the project has the following root directories:
-    ///
-    /// - /a/b/directory1
-    /// - /c/d/directory2
-    ///
-    /// If you want to access `file.txt` in `directory1`, you should use the path `directory1/file.txt`.
-    /// If you want to access `file.txt` in `directory2`, you should use the path `directory2/file.txt`.
-    /// </example>
-    ///
-    /// <example>
-    /// To read a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
-    /// </example>
     pub path: String,
-    /// Optional line number to start reading on (1-based index)
     #[serde(default)]
     pub start_line: Option<u32>,
-    /// Optional line number to end reading on (1-based index, inclusive)
     #[serde(default)]
     pub end_line: Option<u32>,
 }

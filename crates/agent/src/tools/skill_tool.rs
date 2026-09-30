@@ -77,10 +77,8 @@ pub fn render_skill_envelope(skill: &Skill, body: &str) -> String {
     out
 }
 
-/// Retrieves the content and resources of a skill by name.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SkillToolInput {
-    /// The name of the skill to retrieve
     pub name: String,
 }
 

@@ -1,0 +1,5 @@
+{{#if or is_linux is_macos}}
+Justification for creating a directory **outside** the project, shown to the user (attributed to you) in the approval prompt that grants sandboxed terminal commands write access to it. Required only for out-of-project paths; ignored for paths inside the project or the global skills dir.
+{{else}}{{!-- is_windows .. --}}
+Unused on this platform.
+{{/if}}
