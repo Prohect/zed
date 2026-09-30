@@ -194,7 +194,7 @@ impl WriteToolTest {
                 .iter()
                 .map(|tool| tool.name.clone().into())
                 .collect::<Vec<_>>();
-            let template = crate::SystemPromptTemplate {
+            let template = crate::SystemPromptTemplateContext {
                 project: &project_context,
                 available_tools: tool_names,
                 model_name: None,
@@ -203,6 +203,7 @@ impl WriteToolTest {
                 sandboxing: false,
                 is_linux: cfg!(target_os = "linux"),
                 is_windows: cfg!(target_os = "windows"),
+                is_macos: cfg!(target_os = "macos"),
             };
             let templates = Templates::new();
             template.render(&templates)?
