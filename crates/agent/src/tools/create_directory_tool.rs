@@ -19,49 +19,9 @@ use crate::{
 };
 use std::path::{Path, PathBuf};
 
-/// Creates a new directory at the specified path, and all necessary parent directories. Returns confirmation that the directory was created.
-///
-#[cfg_attr(
-    any(target_os = "linux", target_os = "macos"),
-    doc = "This tool can also create a directory **outside** the project. When agent terminal \
-    commands are sandboxed, doing so grants those commands write access to exactly that new \
-    directory. The only other supported path outside the project is \
-    `~/.agents/skills` or a descendant, for global agent skills."
-)]
-#[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos")),
-    doc = "The only supported path outside the project is `~/.agents/skills` or a descendant, \
-    for global agent skills."
-)]
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CreateDirectoryToolInput {
-    /// The path of the new directory.
-    ///
-    /// <example>
-    /// If the project has the following structure:
-    ///
-    /// - directory1/
-    /// - directory2/
-    ///
-    /// You can create a new directory by providing a path of "directory1/new_directory"
-    /// </example>
-    ///
-    /// <example>
-    /// To create a global agent skill directory, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill`.
-    /// </example>
     pub path: String,
-
-    #[cfg_attr(
-        any(target_os = "linux", target_os = "macos"),
-        doc = "Justification for creating a directory **outside** the project, shown to the \
-        user (attributed to you) in the approval prompt that grants sandboxed terminal \
-        commands write access to it. Required only for out-of-project paths; ignored for \
-        paths inside the project or the global skills dir."
-    )]
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos")),
-        doc = "Unused on this platform."
-    )]
     #[serde(default)]
     pub reason: Option<String>,
 }

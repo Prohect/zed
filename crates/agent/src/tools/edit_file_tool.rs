@@ -21,36 +21,9 @@ use ui::SharedString;
 
 const DEFAULT_UI_TEXT: &str = "Editing file";
 
-/// This is a tool for applying edits to an existing file.
-///
-/// The only supported path outside the project is `~/.agents/skills` or a descendant, for global agent skills.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct EditFileToolInput {
-    /// The full path of the file to edit in the project.
-    ///
-    /// WARNING: When specifying which file path need changing, you MUST start each path with one of the project's root directories, unless it's a global agent skill under `~/.agents/skills`.
-    ///
-    /// The following examples assume we have two root directories in the project:
-    /// - /a/b/backend
-    /// - /c/d/frontend
-    ///
-    /// <example>
-    /// `backend/src/main.rs`
-    ///
-    /// Notice how the file path starts with `backend`. Without that, the path would be ambiguous and the call would fail!
-    /// </example>
-    ///
-    /// <example>
-    /// `frontend/db.js`
-    /// </example>
-    ///
-    /// <example>
-    /// To edit a global agent skill file, you may provide a path under `~/.agents/skills`, such as `~/.agents/skills/my-skill/SKILL.md`.
-    /// </example>
     pub path: PathBuf,
-
-    /// List of edit operations to apply sequentially.
-    /// Each edit finds `old_text` in the file and replaces it with `new_text`.
     #[serde(deserialize_with = "deserialize_maybe_stringified")]
     pub edits: Vec<Edit>,
 }

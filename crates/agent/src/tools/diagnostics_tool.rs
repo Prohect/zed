@@ -13,29 +13,8 @@ use util::markdown::MarkdownInlineCode;
 
 type Result<T, E = String> = core::result::Result<T, E>;
 
-/// Get errors and warnings for the project or a specific file.
-///
-/// When a path is provided, shows all diagnostics for that specific file.
-/// When no path is provided, shows a summary of error and warning counts for all files in the project.
-///
-/// This tool attempts to refresh diagnostics before returning.
-/// If refreshing diagnostics fails (for example, if the language server does not support pull-based diagnostics), it will return any diagnostics already present.
-/// Note that, in this case, the results may be out-of-date, and may or may not reflect the most recent edits.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct DiagnosticsToolInput {
-    /// The path to get diagnostics for. If not provided, returns a project-wide summary.
-    ///
-    /// This path should never be absolute, and the first component
-    /// of the path should always be a root directory in a project.
-    ///
-    /// <example>
-    /// If the project has the following root directories:
-    ///
-    /// - lorem
-    /// - ipsum
-    ///
-    /// If you wanna access diagnostics for `dolor.txt` in `ipsum`, you should use the path `ipsum/dolor.txt`.
-    /// </example>
     pub path: Option<String>,
 }
 

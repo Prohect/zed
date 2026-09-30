@@ -12,33 +12,13 @@ use acp_thread::AgentModelId;
 
 use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 
-/// Spawn a sub-agent for a well-scoped task.
-///
-/// - By default a subagent inherits all of your tools. Pass `tools` to restrict it to an allowlist — for example read-only tools like ["read_file", "grep", "find_path"] for a search task, or an empty list for a pure reasoning task over content in the message.
-///
-/// ### Model selection
-/// - When the user requests a particular model or asks you to choose based on cost or capability, call `list_agents_and_models` first, then pass the exact `models[].id` from the native Zed agent entry (`is_native: true`) in `model`.
-/// - Omit `model` to use the user's configured subagent model, or the parent model when no subagent model is configured.
-/// - Do not silently choose a different model when an explicit model is unavailable unless the user allowed fallback.
-/// - A resumed session keeps its existing model, so `model` cannot be combined with `session_id`.
-///
-/// ### Output
-/// - You will receive only the agent's final message as output.
-/// - Successful calls return a session_id that you can use for follow-up messages.
-/// - Error results may also include a session_id if a session was already created.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct SpawnAgentToolInput {
-    /// Short label displayed in the UI while the agent runs (e.g., "Researching alternatives")
     pub label: String,
-    /// The prompt for the agent. For new sessions, include full context needed for the task. For follow-ups (with session_id), you can rely on the agent already having the previous message.
     pub message: String,
-    /// Session ID of an existing agent session to continue instead of creating a new one. Omit to create a new agent.
     #[serde(default, deserialize_with = "deserialize_session_id")]
     pub session_id: Option<acp::SessionId>,
-    /// Optional model override. Pass the exact `models[].id` returned for the
-    /// native Zed agent (`is_native: true`) by `list_agents_and_models`.
-    /// Omit to preserve default behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }

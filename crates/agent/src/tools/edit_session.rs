@@ -39,19 +39,9 @@ pub(crate) enum EditSessionMode {
     Edit,
 }
 
-/// A single edit operation that replaces old text with new text
-/// Properly escape all text fields as valid JSON strings.
-/// Remember to escape special characters like newlines (`\n`) and quotes (`"`) in JSON strings.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Edit {
-    /// The exact text to find in the file. This will be matched using fuzzy matching
-    /// to handle minor differences in whitespace or formatting.
-    ///
-    /// Be minimal with replacements:
-    /// - For unique lines, include only those lines
-    /// - For non-unique lines, include enough context to identify them
     pub old_text: String,
-    /// The text to replace it with
     pub new_text: String,
 }
 

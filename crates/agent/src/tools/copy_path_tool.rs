@@ -19,30 +19,9 @@ use std::path::Path;
 use std::sync::Arc;
 use util::markdown::MarkdownInlineCode;
 
-/// Copies a file or directory in the project, and returns confirmation that the copy succeeded.
-/// Directory contents will be copied recursively.
-///
-/// The only supported paths outside the project are descendants of `~/.agents/skills`, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CopyPathToolInput {
-    /// The source path of the file or directory to copy.
-    /// If a directory is specified, its contents will be copied recursively.
-    ///
-    /// <example>
-    /// If the project has the following files:
-    ///
-    /// - directory1/a/something.txt
-    /// - directory2/a/things.txt
-    /// - directory3/a/other.txt
-    ///
-    /// You can copy the first file by providing a source_path of "directory1/a/something.txt"
-    /// </example>
     pub source_path: String,
-    /// The destination path where the file or directory should be copied to.
-    ///
-    /// <example>
-    /// To copy "directory1/a/something.txt" to "directory2/b/copy.txt", provide a destination_path of "directory2/b/copy.txt"
-    /// </example>
     pub destination_path: String,
 }
 

@@ -19,22 +19,8 @@ use std::path::Path;
 use std::sync::Arc;
 use util::markdown::MarkdownInlineCode;
 
-/// Deletes the file or directory (and the directory's contents, recursively) at the specified path in the project, and returns confirmation of the deletion.
-///
-/// The only supported paths outside the project are descendants of `~/.agents/skills`, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct DeletePathToolInput {
-    /// The path of the file or directory to delete.
-    ///
-    /// <example>
-    /// If the project has the following files:
-    ///
-    /// - directory1/a/something.txt
-    /// - directory2/a/things.txt
-    /// - directory3/a/other.txt
-    ///
-    /// You can delete the first file by providing a path of "directory1/a/something.txt"
-    /// </example>
     pub path: String,
 }
 

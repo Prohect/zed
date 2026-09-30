@@ -11,15 +11,9 @@ use serde::{Deserialize, Serialize};
 use super::symbol_locator::SymbolLocator;
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
 
-/// Renames a symbol across the project using the language server.
-///
-/// This performs a semantic rename, updating all references to the symbol across all files in the project. The language server determines which occurrences to rename based on the symbol's type and scope.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct RenameToolInput {
-    /// The symbol to rename.
     pub symbol: SymbolLocator,
-
-    /// The new name for the symbol.
     pub new_name: String,
 }
 

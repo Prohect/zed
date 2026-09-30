@@ -9,12 +9,8 @@ use project::Project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Finds all references to a symbol across the project using the language server.
-///
-/// Returns a list of locations where the symbol is referenced, including file paths, line numbers, and code snippets for each reference.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct FindReferencesToolInput {
-    /// The symbol to find references of.
     pub symbol: SymbolLocator,
 }
 
