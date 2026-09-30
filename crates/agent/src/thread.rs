@@ -4237,15 +4237,13 @@ impl Thread {
                             }
                         }
                     }
-                    if let Some(guidance) = crate::tool_guidance::ToolGuidanceStore::global(cx)
-                        .and_then(|store| {
-                            store.render_guidance(tool_name.as_ref(), &guidance_context)
-                        })
-                    {
-                        if !description.is_empty() {
-                            description.push_str("\n\n");
-                        }
-                        description.push_str(&guidance);
+                    if let Some(store) = crate::tool_guidance::ToolGuidanceStore::global(cx) {
+                        store.apply(
+                            tool_name.as_ref(),
+                            &mut description,
+                            &mut schema,
+                            &guidance_context,
+                        );
                     }
                     LanguageModelRequestTool::function(
                         tool_name.to_string(),
