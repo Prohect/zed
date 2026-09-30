@@ -1853,6 +1853,7 @@ mod tests {
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Default::default(),
             tool_filter: None,
+            workspace_scope: None,
         }
     }
 
