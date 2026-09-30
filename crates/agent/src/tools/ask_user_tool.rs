@@ -14,30 +14,11 @@ const CHOICE_FIELD: &str = "choice";
 /// The free-text field key used when the user may type their own answer.
 const OTHER_FIELD: &str = "other";
 
-/// Ask the user a question, presenting selectable options and/or a free-text
-/// field.
-///
-/// You control the shape of the answer:
-/// - Provide `options` (two or more) to present clickable choices.
-/// - Set `allow_free_text` to `true` to let the user type their own answer. Do
-///   this when the listed options might not be exhaustive, or when you want a
-///   free-form reply with no preset options at all.
-///
-/// You must provide either at least two `options`, or set `allow_free_text` to
-/// `true` (or both). If both are supplied, the user may pick an option or type
-/// their own answer, and a typed answer takes precedence.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AskUserToolInput {
-    /// The question to ask the user. Keep it short and specific.
     pub question: String,
-    /// The answer choices to present as selectable options. Each entry is the
-    /// exact label shown, and is returned verbatim when chosen. Provide at
-    /// least two options, or leave empty and set `allow_free_text` to `true`.
     #[serde(default)]
     pub options: Vec<String>,
-    /// Whether the user may type their own free-form answer instead of (or in
-    /// addition to) picking an option. Set to `true` when the options may not
-    /// be exhaustive, or when you want a free-form reply.
     #[serde(default)]
     pub allow_free_text: bool,
 }

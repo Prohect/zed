@@ -1,0 +1,5 @@
+{{#if (not sandboxing)}}
+The one-liner command to execute. Do not include shell substitutions or interpolations such as `$VAR`, `${VAR}`, `$(...)`, backticks, `$((...))`, `<(...)`, or `>(...)`; resolve those values first or ask the user for the literal value to use.
+
+REMINDER: read-only git commands (`git log`, `git diff`, `git show`, `git blame`) MUST include `--no-pager` (e.g. `git --no-pager log`). Prefer `git --no-optional-locks status` over `git status` to avoid optional metadata writes. Git commands that may open an editor (`git rebase`, `git commit`, `git merge`, `git tag`) MUST be prefixed with `GIT_EDITOR=true ` (e.g. `GIT_EDITOR=true git rebase origin/main`). Otherwise the terminal will hang.
+{{/if}}
