@@ -5,7 +5,7 @@ use crate::{
     GoToDefinitionTool, GrepTool, ListAgentsAndModelsTool, ListDirectoryTool, MovePathTool,
     ProjectSnapshot, ReadFileTool, RenameTool, SandboxedTerminalTool, SpawnAgentTool,
     SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
-    WriteFileTool, decide_permission_from_settings,
+    WriteFileTool, decide_permission_from_settings, decide_permission_from_settings_with_shell,
 };
 use acp_thread::{AgentModelId, ClientUserMessageId, MentionUri};
 use action_log::ActionLog;
@@ -780,6 +780,7 @@ pub trait ThreadEnvironment {
     fn create_terminal(
         &self,
         command: String,
+        shell: Option<task::Shell>,
         extra_env: Vec<acp::EnvVariable>,
         cwd: Option<PathBuf>,
         output_byte_limit: Option<u64>,
@@ -930,6 +931,7 @@ pub struct ToolPermissionContext {
     pub tool_name: String,
     pub input_values: Vec<String>,
     pub scope: ToolPermissionScope,
+    shell_kind: util::shell::ShellKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -945,6 +947,7 @@ impl ToolPermissionContext {
             tool_name: tool_name.into(),
             input_values,
             scope: ToolPermissionScope::ToolInput,
+            shell_kind: util::shell::ShellKind::system(),
         }
     }
 
@@ -953,7 +956,13 @@ impl ToolPermissionContext {
             tool_name: tool_name.into(),
             input_values: target_paths,
             scope: ToolPermissionScope::SymlinkTarget,
+            shell_kind: util::shell::ShellKind::system(),
         }
+    }
+
+    pub fn with_shell_kind(mut self, shell_kind: util::shell::ShellKind) -> Self {
+        self.shell_kind = shell_kind;
+        self
     }
 
     pub fn for_agent_skills(mut self) -> Self {
@@ -987,7 +996,6 @@ impl ToolPermissionContext {
     /// will return a `Deny` with an explanatory error message.
     pub fn build_permission_options(&self) -> acp_thread::PermissionOptions {
         use crate::pattern_extraction::*;
-        use util::shell::ShellKind;
 
         let tool_name = &self.tool_name;
         let input_values = &self.input_values;
@@ -1025,7 +1033,7 @@ impl ToolPermissionContext {
         // Check if the user's shell supports POSIX-like command chaining.
         // See the doc comment above for the full explanation of why this is needed.
         let shell_supports_always_allow = if tool_name == TerminalTool::NAME {
-            ShellKind::system().supports_posix_chaining()
+            self.shell_kind.supports_posix_chaining()
         } else {
             true
         };
@@ -5884,12 +5892,14 @@ impl ToolCallEventStream {
 
         let tool_name = context.tool_name.clone();
         let input_values = context.input_values.clone();
+        let shell_kind = context.shell_kind;
         let check_settings: Box<dyn Fn(&App) -> ToolPermissionDecision> =
             Box::new(move |cx: &App| {
-                decide_permission_from_settings(
+                decide_permission_from_settings_with_shell(
                     &tool_name,
                     &input_values,
                     agent_settings::AgentSettings::get_global(cx),
+                    shell_kind,
                 )
             });
 
