@@ -1,0 +1,3 @@
+{{#if (not sandboxing)}}
+Return only the first N lines of terminal output to the model after the command finishes. Do not pipe output to `head`; use this parameter instead so the user can still see live output. Avoid requesting too many lines, or the response may waste tokens or exceed the context window.
+{{/if}}

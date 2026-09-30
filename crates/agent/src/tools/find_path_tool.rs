@@ -12,28 +12,9 @@ use std::fmt::Write;
 use std::{cmp, path::PathBuf, sync::Arc};
 use util::paths::PathMatcher;
 
-/// Find file paths that match a given pattern.
-///
-/// - Supports glob patterns like "**/*.js" or "src/**/*.ts"
-/// - Returns matching file paths sorted alphabetically
-///
-/// - Results are paginated with 50 matches per page. Use the optional 'offset' parameter to request subsequent pages.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct FindPathToolInput {
-    /// The glob to match against every path in the project.
-    ///
-    /// <example>
-    /// If the project has the following root directories:
-    ///
-    /// - directory1/a/something.txt
-    /// - directory2/a/things.txt
-    /// - directory3/a/other.txt
-    ///
-    /// You can get back the first two paths by providing a glob of "*thing*.txt"
-    /// </example>
     pub glob: String,
-    /// Optional starting position for paginated results (0-based).
-    /// When not provided, starts from the beginning.
     #[serde(default)]
     pub offset: usize,
 }

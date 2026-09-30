@@ -1,0 +1,16 @@
+A glob pattern for the paths of files to include in the search.
+Supports standard glob patterns like "**/*.rs" or "frontend/src/**/*.ts".
+If omitted, all files in the project will be searched.
+
+The glob pattern is matched against the full path including the project root directory.
+
+<example>
+If the project has the following root directories:
+
+- /a/b/backend
+- /c/d/frontend
+
+Use "backend/**/*.rs" to search only Rust files in the backend root directory.
+Use "frontend/src/**/*.ts" to search TypeScript files only in the frontend root directory (sub-directory "src").
+Use "**/*.rs" to search Rust files across all root directories.
+</example>

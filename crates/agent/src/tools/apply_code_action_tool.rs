@@ -10,17 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::symbol_locator::CodeActionStore;
 use crate::{AgentTool, ProjectScope, ToolCallEventStream, ToolInput};
 
-/// Applies a code action previously retrieved by get_code_actions.
-///
-/// You must call get_code_actions first to get the list of available actions,
-/// then use the number from that list to choose which action to apply.
-///
-/// After applying a code action, the list is cleared. If you want to apply
-/// another action, call get_code_actions again.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ApplyCodeActionToolInput {
-    /// The 1-based index of the code action to apply, from the list
-    /// returned by get_code_actions.
     pub index: u32,
 }
 
