@@ -295,29 +295,32 @@ fn open_system_prompt_template(
     .detach_and_log_err(cx);
 }
 
-/// Opens a tool guidance override file, materializing it with the tool's
-/// built-in default guidance (or a stub, if the tool has none) first if it
-/// doesn't exist yet.
+/// Opens a tool's guidance override, materializing the tool's whole tree from
+/// its built-in defaults (or a stub `&self.hbs`, if it has none) first, so the
+/// directory is immediately editable in place.
+/// Opens a tool's guidance override, materializing the tool's whole tree
+/// first — embedded guidance defaults plus a placeholder for every
+/// input-schema node — so both the tool and its parameters are editable in
+/// place.
 fn open_tool_guidance_override(
     workspace: &mut Workspace,
     tool_name: &'static str,
     cx: &mut Context<Workspace>,
 ) {
     let fs = workspace.app_state().fs.clone();
-    let path = paths::tool_guidance_dir().join(format!("{tool_name}.hbs"));
+    let entry = paths::tool_guidance_dir().join(tool_name).join("&self.hbs");
     cx.spawn(async move |workspace, cx| {
-        if !fs.is_file(&path).await {
-            let content = match agent::tool_guidance::builtin_guidance(tool_name) {
-                Some(default) => default.to_string(),
-                None => agent::tool_guidance::default_tool_guidance_stub(tool_name),
-            };
-            // `write` creates the parent `tool_guidance` directory if needed.
-            fs.write(&path, content.as_bytes()).await?;
+        for (relative, content) in agent::tool_guidance::default_tool_guidance_files(tool_name) {
+            let path = paths::tool_guidance_dir().join(relative);
+            if !fs.is_file(&path).await {
+                // `write` creates the tool's `tool_guidance` subdirectory if needed.
+                fs.write(&path, content.as_bytes()).await?;
+            }
         }
         workspace
             .update_in(cx, |workspace, window, cx| {
                 workspace.open_abs_path(
-                    path,
+                    entry,
                     workspace::OpenOptions {
                         focus: Some(true),
                         ..Default::default()
