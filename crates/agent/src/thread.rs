@@ -4,12 +4,13 @@ use crate::{
     DiagnosticsTool, EditFileTool, FetchTool, FindPathTool, FindReferencesTool, GetCodeActionsTool,
     GoToDefinitionTool, GrepTool, ListAgentsAndModelsTool, ListDirectoryTool, MovePathTool,
     ProjectScope, ProjectSnapshot, ReadFileTool, RenameTool, SandboxedTerminalTool, SpawnAgentTool,
-    SystemPromptTemplate, Template, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
+    SystemPromptTemplateContext, Templates, TerminalTool, ToolPermissionDecision, WebSearchTool,
     WriteFileTool, decide_permission_from_settings, decide_permission_from_settings_with_shell,
+    render_system_prompt,
 };
 use acp_thread::{AgentModelId, ClientUserMessageId, MentionUri};
 use action_log::ActionLog;
-use agent_settings::UserAgentsMd;
+use agent_settings::{SystemPromptTemplate, UserAgentsMd};
 
 use crate::sandboxing::{
     SandboxRequest, ThreadSandbox, ThreadSandboxGrants, sandbox_git_dirs,
@@ -4186,7 +4187,21 @@ impl Thread {
             .model()
             .ok_or_else(|| anyhow!(NoModelConfiguredError))?;
         let sandboxing_enabled = crate::sandboxing::sandboxing_enabled(cx);
+        let guidance_sandboxing =
+            crate::sandboxing::sandboxing_enabled_for_project(self.project.read(cx), cx);
+        let model_name = model.name().0.to_string();
+        let date = Local::now().format("%Y-%m-%d").to_string();
         let tools = if let Some(turn) = self.running_turn.as_ref() {
+            let available_tools = turn.tools.keys().cloned().collect::<Vec<_>>();
+            let guidance_context = agent_settings::RulesTemplateContext {
+                available_tools: &available_tools,
+                model_name: Some(model_name.as_str()),
+                date: &date,
+                is_linux: cfg!(target_os = "linux"),
+                is_windows: cfg!(target_os = "windows"),
+                is_macos: cfg!(target_os = "macos"),
+                sandboxing: guidance_sandboxing,
+            };
             turn.tools
                 .iter()
                 .map(|(tool_name, tool)| {
@@ -4221,6 +4236,16 @@ impl Thread {
                                 properties.remove("reason");
                             }
                         }
+                    }
+                    if let Some(guidance) = crate::tool_guidance::ToolGuidanceStore::global(cx)
+                        .and_then(|store| {
+                            store.render_guidance(tool_name.as_ref(), &guidance_context)
+                        })
+                    {
+                        if !description.is_empty() {
+                            description.push_str("\n\n");
+                        }
+                        description.push_str(&guidance);
                     }
                     LanguageModelRequestTool::function(
                         tool_name.to_string(),
@@ -4483,22 +4508,25 @@ impl Thread {
         log::trace!("Building request messages from {} thread messages", end_ix);
 
         let user_agents_md = UserAgentsMd::global(cx).and_then(|s| s.content().cloned());
-        let system_prompt = SystemPromptTemplate {
+        let sandboxing =
+            crate::sandboxing::sandboxing_enabled_for_project(self.project.read(cx), cx);
+
+        let user_template = SystemPromptTemplate::global(cx);
+        let context = SystemPromptTemplateContext {
             project: self.project_context.read(cx),
             available_tools,
             model_name: self.model().map(|m| m.name().0.to_string()),
             date: Local::now().format("%Y-%m-%d").to_string(),
             user_agents_md,
-            sandboxing: crate::sandboxing::sandboxing_enabled_for_project(
-                self.project.read(cx),
-                cx,
-            ),
+            sandboxing,
             is_linux: cfg!(target_os = "linux"),
             is_windows: cfg!(target_os = "windows"),
-        }
-        .render(&self.templates)
-        .context("failed to build system prompt")
-        .expect("Invalid template");
+            is_macos: cfg!(target_os = "macos"),
+        };
+
+        let system_prompt = render_system_prompt(&context, &self.templates, user_template)
+            .context("failed to build system prompt")
+            .expect("Invalid template");
         let mut messages = vec![LanguageModelRequestMessage {
             role: Role::System,
             content: vec![system_prompt.into()],
