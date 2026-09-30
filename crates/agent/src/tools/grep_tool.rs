@@ -24,47 +24,16 @@ const fn default_context_lines() -> u32 {
     2
 }
 
-/// Searches the contents of files in the project with a regular expression
-///
-/// - Supports full regex syntax (eg. "log.*Error", "function\\s+\\w+", etc.)
-/// - Never use this tool to search for paths. Only search file contents with this tool.
-/// - Results are paginated with 20 matches per page. Use the optional 'offset' parameter to request subsequent pages.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct GrepToolInput {
-    /// A regex pattern to search for in the entire project. Note that the regex will be parsed by the Rust `regex` crate.
-    ///
-    /// Do NOT specify a path here! This will only be matched against the code **content**.
     pub regex: String,
-    /// A glob pattern for the paths of files to include in the search.
-    /// Supports standard glob patterns like "**/*.rs" or "frontend/src/**/*.ts".
-    /// If omitted, all files in the project will be searched.
-    ///
-    /// The glob pattern is matched against the full path including the project root directory.
-    ///
-    /// <example>
-    /// If the project has the following root directories:
-    ///
-    /// - /a/b/backend
-    /// - /c/d/frontend
-    ///
-    /// Use "backend/**/*.rs" to search only Rust files in the backend root directory.
-    /// Use "frontend/src/**/*.ts" to search TypeScript files only in the frontend root directory (sub-directory "src").
-    /// Use "**/*.rs" to search Rust files across all root directories.
-    /// </example>
     pub include_pattern: Option<String>,
-    /// Optional starting position for paginated results (0-based).
-    /// When not provided, starts from the beginning.
     #[serde(default)]
     pub offset: u32,
-    /// Whether the regex is case-sensitive. Defaults to false (case-insensitive).
     #[serde(default)]
     pub case_sensitive: bool,
-    /// The maximum number of lines of tree-sitter ancestor node to render each matched result in the search results.
-    /// Fallback to simple context render mode if lines of one ancestor node are greater than the maximum allowed or tree-sitter fails.
     #[serde(default = "default_max_ancestor_lines")]
     pub max_ancestor_lines: u32,
-    /// The number of context lines for simple context render mode.
-    /// Example of one simple context render result: `context_lines of lines before matched line ++ matched line ++ context_lines of lines after matched line`.
     #[serde(default = "default_context_lines")]
     pub context_lines: u32,
 }

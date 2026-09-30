@@ -15,11 +15,8 @@ use ui::prelude::*;
 use util::markdown::MarkdownInlineCode;
 use web_search::WebSearchRegistry;
 
-/// Search the web for information using your query.
-/// Results will include snippets and links from relevant web pages.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct WebSearchToolInput {
-    /// The search term or question to query on the web.
     query: String,
 }
 

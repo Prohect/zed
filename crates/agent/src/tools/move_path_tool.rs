@@ -18,33 +18,9 @@ use settings::Settings;
 use std::{path::Path, sync::Arc};
 use util::markdown::MarkdownInlineCode;
 
-/// Moves or rename a file or directory in the project, and returns confirmation that the move succeeded.
-///
-/// If the source and destination directories are the same, but the filename is different, this performs a rename. Otherwise, it performs a move.
-///
-/// The only supported paths outside the project are descendants of `~/.agents/skills`, for global agent skills.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MovePathToolInput {
-    /// The source path of the file or directory to move/rename.
-    ///
-    /// <example>
-    /// If the project has the following files:
-    ///
-    /// - directory1/a/something.txt
-    /// - directory2/a/things.txt
-    /// - directory3/a/other.txt
-    ///
-    /// You can move the first file by providing a source_path of "directory1/a/something.txt"
-    /// </example>
     pub source_path: String,
-
-    /// The destination path where the file or directory should be moved/renamed to.
-    /// If the paths are the same except for the filename, then this will be a rename.
-    ///
-    /// <example>
-    /// To move "directory1/a/something.txt" to "directory2/b/renamed.txt",
-    /// provide a destination_path of "directory2/b/renamed.txt"
-    /// </example>
     pub destination_path: String,
 }
 

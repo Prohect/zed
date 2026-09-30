@@ -46,10 +46,8 @@ fn normalize_url(url: &str) -> Cow<'_, str> {
     }
 }
 
-/// Fetches a URL and returns the content as Markdown.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct FetchToolInput {
-    /// The URL to fetch.
     url: String,
 }
 
