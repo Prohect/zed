@@ -1,3 +1,67 @@
+{{!--
+When this file exists and renders successfully, its output replaces the
+built-in system prompt. On a render error Zed falls back to the built-in
+system prompt and shows a warning. Delete this file to return to the
+built-in system prompt entirely.
+
+Text is emitted verbatim; comments like this one are stripped at render
+time and never reach the model. For template syntax and the built-in
+helpers see https://docs.rs/handlebars/latest/handlebars/#built-in-helpers
+
+Zed renders in strict mode: an unknown variable fails the render, so a
+typo'd name falls back to the built-in system prompt with a warning rather
+than emitting nothing.
+
+Context variables for system prompt:
+  arch              host architecture
+  available_tools   names of the tools enabled for this session
+  date              today's date, YYYY-MM-DD
+  has_rules         whether any worktree has a rules file
+  has_skills        whether skills are available
+  is_linux          whether the host is Linux
+  is_macos          whether the host is macOS
+  is_windows        whether the host is Windows
+  model_name        active model name, if any
+  os                host operating system
+  sandboxing        whether terminal commands run in the OS-level sandbox
+  shell             default shell
+  skills            catalog of skills (name, description, location)
+  user_agents_md    raw user-global `AGENTS.md` content, if any
+  worktrees         project worktrees (root_name, abs_path, rules_file)
+
+Context variables for tool guidance:
+  available_tools
+  date
+  is_linux
+  is_macos
+  is_windows
+  model_name
+  sandboxing
+
+Zed registers six custom helpers: `contains` (list, item),
+`join` (list, separator), `array` (items...) for building a list
+inline, `union` (list1, list2), `intersect` (list1, list2), `differ` (list1, list2).
+
+  {{#if (contains available_tools "grep")}}
+  Prefer the `grep` tool for content search.
+  {{/if}}
+
+  Available tools: {{join available_tools ", "}}
+  Platforms: {{join (array "linux" "windows" "macos") " / "}}
+
+  assert {{join (differ (union (array "a" "b" "c") (array "b" "c" "d")) (intersect (array "a" "b" "c") (array "b" "c" "d"))) ", "}} == "a, d"
+
+Partials (imports):
+Every other `*.hbs` file under this directory (recursively) is inplace-appendable by
+its relative path without the extension, `/`-separated on every platform —
+`partials/style.hbs` → `{{> partials/style}}`. Use `/` even on Windows:
+`\` is the template escape character and cannot appear in a partial name.
+######################################################################################
+######################################################################################
+######################################################################################
+######################################################################################
+--}}
+
 You are the Zed coding agent running inside the Zed editor. You help users complete software engineering tasks by understanding their codebase, making careful changes, and explaining your work clearly. Use your broad knowledge of programming languages, frameworks, design patterns, and engineering best practices to solve problems pragmatically.
 
 ## Communication
@@ -57,7 +121,7 @@ If you are unsure how to fulfill the user's request, gather more information wit
 - When providing paths to tools, the path should always start with the name of a project root directory listed above.
 - Before you read or edit a file, you must first know its full project-relative path. Do not guess file paths.
 - Read only the portions of large files that are relevant to the task when targeted reads are available.
-{{#if (contains available_tools 'grep') }}
+{{#if (contains available_tools "grep") }}
 - When looking for symbols in the project, prefer the `grep` tool.
 - As you learn about the structure of the project, scope searches to targeted subtrees instead of repeatedly searching the whole repository.
 - If the user specifies a partial file path and you do not know the full path, use `find_path` rather than `grep` before reading or editing the file.
@@ -111,7 +175,7 @@ When debugging, only make code changes if you are confident they address the roo
 - If an external API requires an API key or secret, tell the user. Never hardcode secrets or place them where they may be exposed.
 - Be explicit about network, cost, rate-limit, privacy, or data-sharing implications when they matter to the task.
 
-{{#if (contains available_tools 'spawn_agent') }}
+{{#if (contains available_tools "spawn_agent") }}
 ## Multi-agent delegation
 
 Sub-agents can help you move faster on large tasks when you use them thoughtfully. This is most useful for:
@@ -154,7 +218,7 @@ The current project contains the following root directories:
 {{/each}}
 
 {{#if sandboxing}}
-{{#if (contains available_tools 'terminal')}}
+{{#if (contains available_tools "terminal")}}
 ## Terminal sandbox
 
 The `terminal` tool runs commands inside a sandbox with these permissions:

@@ -325,6 +325,25 @@ pub fn agents_file() -> &'static PathBuf {
     AGENTS_FILE.get_or_init(|| config_dir().join("AGENTS.md"))
 }
 
+/// Returns the path to the user-global overridable system prompt template.
+///
+/// When present, this Handlebars template replaces the built-in system prompt
+/// template. Sibling `*.hbs` files in the same directory are importable from it
+/// as partials under their relative file path without the extension.
+pub fn system_prompt_template_file() -> &'static PathBuf {
+    static SYSTEM_PROMPT_TEMPLATE_FILE: OnceLock<PathBuf> = OnceLock::new();
+    SYSTEM_PROMPT_TEMPLATE_FILE.get_or_init(|| config_dir().join("system_prompt.hbs"))
+}
+
+/// Returns the path to the user-global tool guidance directory.
+///
+/// Each `<tool>.hbs` file in this directory overrides the built-in default
+/// guidance for the tool of the same name in the native agent's system prompt.
+pub fn tool_guidance_dir() -> &'static PathBuf {
+    static TOOL_GUIDANCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+    TOOL_GUIDANCE_DIR.get_or_init(|| config_dir().join("tool_guidance"))
+}
+
 /// User-facing display form of the user-global `AGENTS.md` file path —
 /// i.e. what a human should see in messages and prompts, with the
 /// platform's native path separator and home/config directory shorthand.
