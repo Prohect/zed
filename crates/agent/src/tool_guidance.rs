@@ -356,45 +356,72 @@ impl ToolGuidanceStore {
         schema: &mut Value,
         context: &RulesTemplateContext,
     ) {
-        let files = self.merged_files();
-        let prefix = format!("{tool_name}/");
-        for (key, source) in files.iter() {
-            let target = if key == tool_name {
-                // Legacy flat file: `tool_guidance/<tool>.hbs`.
-                DocTarget::ToolGuidance
-            } else if let Some(rest) = key.strip_prefix(&prefix) {
-                match parse_target(rest) {
-                    Some(target) => target,
-                    None => {
-                        log::warn!("ignoring unresolvable tool guidance path `{key}`");
-                        continue;
-                    }
-                }
-            } else {
-                continue;
-            };
+        apply_guidance_files(
+            &self.merged_files(),
+            tool_name,
+            description,
+            schema,
+            context,
+        );
+    }
+}
 
-            let rendered = match agent_settings::render_rules_template(source, &files, context) {
-                Ok(rendered) => rendered,
-                Err(err) => {
-                    log::error!("Failed to render tool guidance for `{key}`: {err:#}");
+/// Applies only the built-in default guidance, without user overrides — what a
+/// session with no `tool_guidance` overrides sends to the model.
+#[cfg(test)]
+pub(crate) fn apply_builtin_guidance(
+    tool_name: &str,
+    description: &mut String,
+    schema: &mut Value,
+    context: &RulesTemplateContext,
+) {
+    apply_guidance_files(&BUILTIN_GUIDANCE, tool_name, description, schema, context);
+}
+
+fn apply_guidance_files(
+    files: &BTreeMap<String, String>,
+    tool_name: &str,
+    description: &mut String,
+    schema: &mut Value,
+    context: &RulesTemplateContext,
+) {
+    let prefix = format!("{tool_name}/");
+    for (key, source) in files.iter() {
+        let target = if key == tool_name {
+            // Legacy flat file: `tool_guidance/<tool>.hbs`.
+            DocTarget::ToolGuidance
+        } else if let Some(rest) = key.strip_prefix(&prefix) {
+            match parse_target(rest) {
+                Some(target) => target,
+                None => {
+                    log::warn!("ignoring unresolvable tool guidance path `{key}`");
                     continue;
                 }
-            };
-            let rendered = rendered.trim();
-            if rendered.is_empty() {
+            }
+        } else {
+            continue;
+        };
+
+        let rendered = match agent_settings::render_rules_template(source, files, context) {
+            Ok(rendered) => rendered,
+            Err(err) => {
+                log::error!("Failed to render tool guidance for `{key}`: {err:#}");
                 continue;
             }
+        };
+        let rendered = rendered.trim();
+        if rendered.is_empty() {
+            continue;
+        }
 
-            match target {
-                DocTarget::ToolGuidance => append_section(description, rendered),
-                DocTarget::Schema(pointer) => {
-                    let Some(Value::Object(node)) = schema.pointer_mut(&pointer) else {
-                        log::warn!("tool guidance `{key}` targets absent schema node `{pointer}`");
-                        continue;
-                    };
-                    append_description(node, rendered);
-                }
+        match target {
+            DocTarget::ToolGuidance => append_section(description, rendered),
+            DocTarget::Schema(pointer) => {
+                let Some(Value::Object(node)) = schema.pointer_mut(&pointer) else {
+                    log::warn!("tool guidance `{key}` targets absent schema node `{pointer}`");
+                    continue;
+                };
+                append_description(node, rendered);
             }
         }
     }
@@ -548,7 +575,8 @@ mod tests {
 
         // The tool description comes from the embedded default...
         assert!(files.contains_key("edit_file/&self.hbs"));
-        // ...and every input-schema node is scaffolded, nested array items too.
+        // ...and every input-schema node is covered, nested array items too: the
+        // embedded default where one exists, a comment-only scaffold otherwise.
         for path in [
             "edit_file/path.hbs",
             "edit_file/edits.hbs",
@@ -562,11 +590,35 @@ mod tests {
                     files.keys().collect::<Vec<_>>()
                 )
             });
-            assert!(
-                content.starts_with("{{!--"),
-                "`{path}` should be a comment-only stub: {content}"
-            );
+            let key = path.strip_suffix(".hbs").expect("a .hbs path");
+            if let Some(default) = BUILTIN_GUIDANCE.get(key) {
+                assert_eq!(content, default, "`{path}` should be the embedded default");
+            } else {
+                assert!(
+                    content.starts_with("{{!--"),
+                    "`{path}` should be a comment-only stub: {content}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn scaffolds_fill_only_nodes_without_defaults() {
+        let schema = serde_json::json!({
+            "properties": {
+                "curated": {},
+                "uncurated": {},
+            }
+        });
+        let mut files = BTreeMap::new();
+        files.insert(
+            "some_tool/curated.hbs".to_string(),
+            "Curated guidance.".to_string(),
+        );
+        collect_parameter_stubs("some_tool", "", &schema, &mut files);
+        // An existing entry — e.g. an embedded default — always wins over a scaffold.
+        assert_eq!(files["some_tool/curated.hbs"], "Curated guidance.");
+        assert!(files["some_tool/uncurated.hbs"].starts_with("{{!--"));
     }
 
     #[test]
@@ -586,13 +638,6 @@ mod tests {
             agent_settings::render_rules_template(source, &BUILTIN_GUIDANCE, &context)
                 .unwrap_or_else(|err| panic!("`{key}` failed to render: {err:#}"));
         }
-        // A scaffold is comment-only, so it renders to nothing and is skipped.
-        let stub = BUILTIN_GUIDANCE
-            .get("edit_file/path")
-            .expect("edit_file/path scaffold should exist");
-        let rendered = agent_settings::render_rules_template(stub, &BUILTIN_GUIDANCE, &context)
-            .expect("the scaffold should render");
-        assert!(rendered.trim().is_empty(), "stub rendered: {rendered:?}");
     }
 
     /// Scaffolding utility: writes a placeholder `*.hbs` for every built-in

@@ -2623,6 +2623,20 @@ mod tests {
         );
     }
 
+    /// The template context for tests that apply the built-in guidance tier to
+    /// a tool's schema: no sandboxing, so the sandbox-gated sections render.
+    fn guidance_test_context() -> agent_settings::RulesTemplateContext<'static> {
+        agent_settings::RulesTemplateContext {
+            available_tools: &[],
+            model_name: None,
+            date: "1970-01-01",
+            is_linux: false,
+            is_windows: false,
+            is_macos: false,
+            sandboxing: false,
+        }
+    }
+
     #[test]
     fn test_terminal_guidance_mentions_forbidden_substitutions() {
         // The substitution pitfalls moved to the overridable guidance tier
@@ -2658,7 +2672,17 @@ mod tests {
 
     #[test]
     fn test_terminal_tool_input_schema_mentions_forbidden_substitutions() {
-        let schema_json = <TerminalTool as crate::AgentTool>::input_schema().to_value();
+        // The raw schema is the minimal contract tier; the pitfalls live in
+        // the guidance tier, appended to the schema node descriptions when the
+        // completion request is built.
+        let mut schema_json = <TerminalTool as crate::AgentTool>::input_schema().to_value();
+        let mut description = String::new();
+        crate::tool_guidance::apply_builtin_guidance(
+            TerminalTool::NAME,
+            &mut description,
+            &mut schema_json,
+            &guidance_test_context(),
+        );
         let schema_text = schema_json.to_string();
 
         assert!(
@@ -2702,7 +2726,15 @@ mod tests {
 
     #[test]
     fn test_terminal_tool_input_schema_mentions_head_and_tail_parameters() {
-        let schema_json = <TerminalTool as crate::AgentTool>::input_schema().to_value();
+        // As above: the head/tail guidance lives in the guidance tier.
+        let mut schema_json = <TerminalTool as crate::AgentTool>::input_schema().to_value();
+        let mut description = String::new();
+        crate::tool_guidance::apply_builtin_guidance(
+            TerminalTool::NAME,
+            &mut description,
+            &mut schema_json,
+            &guidance_test_context(),
+        );
         let schema_text = schema_json.to_string();
 
         assert!(schema_text.contains("head_lines"));
