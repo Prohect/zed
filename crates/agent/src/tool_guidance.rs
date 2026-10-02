@@ -43,6 +43,7 @@
 //! same-named file in the user-global `tool_guidance` config directory. A
 //! tool's guidance reaches the model only when the tool itself is available.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -51,7 +52,8 @@ use std::time::Duration;
 use agent_settings::RulesTemplateContext;
 use fs::Fs;
 use futures::StreamExt as _;
-use gpui::{App, BorrowAppContext, Global, Task};
+use gpui::{App, BorrowAppContext, Global, SharedString, Task};
+use prompt_store::ScopedRootContext;
 use rust_embed::RustEmbed;
 use serde_json::Value;
 use util::ResultExt as _;
@@ -299,10 +301,46 @@ pub enum ToolGuidanceOverrideState {
     Overridden,
 }
 
+/// The rendered guidance additions for every tool: tool name → the ordered
+/// `(target, text)` sections to append.
+type RenderedGuidance = BTreeMap<String, Vec<(DocTarget, String)>>;
+
+/// Everything a guidance template can read that isn't fixed at compile time
+/// (the platform flags are), so a render stays valid exactly while this is
+/// unchanged.
+#[derive(PartialEq, Eq)]
+struct GuidanceContextKey {
+    available_tools: Vec<SharedString>,
+    model_name: Option<SharedString>,
+    date: SharedString,
+    sandboxing: bool,
+    scoped: bool,
+    scoped_roots: Vec<ScopedRootContext>,
+}
+
+impl GuidanceContextKey {
+    fn new(context: &RulesTemplateContext) -> Self {
+        Self {
+            available_tools: context.available_tools.to_vec(),
+            model_name: context.model_name.map(SharedString::from),
+            date: SharedString::from(context.date),
+            sandboxing: context.sandboxing,
+            scoped: context.scoped,
+            scoped_roots: context.scoped_roots.to_vec(),
+        }
+    }
+}
+
 /// The user-global tool guidance overrides, kept up to date by a watcher.
 pub struct ToolGuidanceStore {
     /// Relative path without extension, `/`-separated → content.
     user_files: BTreeMap<String, String>,
+    /// Guidance rendered for the most recent template context. Rendering
+    /// recompiles every merged file as a Handlebars partial once per rendered
+    /// file, which is far too expensive to repeat for each tool of each
+    /// completion request — so renders are memoized until the context changes
+    /// or the watcher reloads the override files.
+    render_cache: RefCell<Option<(GuidanceContextKey, Arc<RenderedGuidance>)>>,
     _watcher: Task<()>,
 }
 
@@ -344,8 +382,23 @@ impl ToolGuidanceStore {
         }
     }
 
-    /// Renders every guidance file for `tool_name` and appends it to the tool's
-    /// description and to the addressed input-schema node descriptions.
+    /// The rendered guidance for every tool under `context`, re-rendering
+    /// only when the context changed since the last render (or the watcher
+    /// reloaded the override files and cleared the cache).
+    fn rendered_guidance(&self, context: &RulesTemplateContext) -> Arc<RenderedGuidance> {
+        let key = GuidanceContextKey::new(context);
+        if let Some((cached_key, rendered)) = &*self.render_cache.borrow()
+            && *cached_key == key
+        {
+            return rendered.clone();
+        }
+        let rendered = Arc::new(render_guidance_files(&self.merged_files(), context));
+        *self.render_cache.borrow_mut() = Some((key, rendered.clone()));
+        rendered
+    }
+
+    /// Appends `tool_name`'s guidance to the tool's description and to the
+    /// addressed input-schema node descriptions.
     ///
     /// A render failure or a path that resolves to a node the schema does not
     /// have is logged and skipped rather than failing the request build.
@@ -356,13 +409,21 @@ impl ToolGuidanceStore {
         schema: &mut Value,
         context: &RulesTemplateContext,
     ) {
-        apply_guidance_files(
-            &self.merged_files(),
+        apply_rendered(
+            &self.rendered_guidance(context),
             tool_name,
             description,
             schema,
-            context,
         );
+    }
+
+    #[cfg(test)]
+    fn for_test(user_files: BTreeMap<String, String>) -> Self {
+        Self {
+            user_files,
+            render_cache: RefCell::new(None),
+            _watcher: Task::ready(()),
+        }
     }
 }
 
@@ -375,53 +436,74 @@ pub(crate) fn apply_builtin_guidance(
     schema: &mut Value,
     context: &RulesTemplateContext,
 ) {
-    apply_guidance_files(&BUILTIN_GUIDANCE, tool_name, description, schema, context);
+    let rendered = render_guidance_files(&BUILTIN_GUIDANCE, context);
+    apply_rendered(&rendered, tool_name, description, schema);
 }
 
-fn apply_guidance_files(
+/// Splits a merged guidance key into its tool and render target: the legacy
+/// flat `<tool>` form extends the tool description, `<tool>/<rest>` follows
+/// the tree rules of [`parse_target`].
+fn parse_key(key: &str) -> Option<(&str, DocTarget)> {
+    match key.split_once('/') {
+        None => Some((key, DocTarget::ToolGuidance)),
+        Some((tool_name, rest)) => parse_target(rest).map(|target| (tool_name, target)),
+    }
+}
+
+/// Renders every guidance file, grouping the additions by tool.
+fn render_guidance_files(
     files: &BTreeMap<String, String>,
-    tool_name: &str,
-    description: &mut String,
-    schema: &mut Value,
     context: &RulesTemplateContext,
-) {
-    let prefix = format!("{tool_name}/");
-    for (key, source) in files.iter() {
-        let target = if key == tool_name {
-            // Legacy flat file: `tool_guidance/<tool>.hbs`.
-            DocTarget::ToolGuidance
-        } else if let Some(rest) = key.strip_prefix(&prefix) {
-            match parse_target(rest) {
-                Some(target) => target,
-                None => {
-                    log::warn!("ignoring unresolvable tool guidance path `{key}`");
-                    continue;
-                }
-            }
-        } else {
+) -> RenderedGuidance {
+    let mut rendered = RenderedGuidance::new();
+    for (key, source) in files {
+        let Some((tool_name, target)) = parse_key(key) else {
+            log::warn!("ignoring unresolvable tool guidance path `{key}`");
             continue;
         };
 
-        let rendered = match agent_settings::render_rules_template(source, files, context) {
-            Ok(rendered) => rendered,
+        let text = match agent_settings::render_rules_template(source, files, context) {
+            Ok(text) => text,
             Err(err) => {
                 log::error!("Failed to render tool guidance for `{key}`: {err:#}");
                 continue;
             }
         };
-        let rendered = rendered.trim();
-        if rendered.is_empty() {
+        let text = text.trim();
+        if text.is_empty() {
             continue;
         }
 
+        rendered
+            .entry(tool_name.to_string())
+            .or_default()
+            .push((target, text.to_string()));
+    }
+    rendered
+}
+
+/// Appends the rendered guidance for `tool_name` to the tool's description
+/// and the addressed input-schema node descriptions.
+fn apply_rendered(
+    rendered: &RenderedGuidance,
+    tool_name: &str,
+    description: &mut String,
+    schema: &mut Value,
+) {
+    let Some(additions) = rendered.get(tool_name) else {
+        return;
+    };
+    for (target, text) in additions {
         match target {
-            DocTarget::ToolGuidance => append_section(description, rendered),
+            DocTarget::ToolGuidance => append_section(description, text),
             DocTarget::Schema(pointer) => {
-                let Some(Value::Object(node)) = schema.pointer_mut(&pointer) else {
-                    log::warn!("tool guidance `{key}` targets absent schema node `{pointer}`");
+                let Some(Value::Object(node)) = schema.pointer_mut(pointer) else {
+                    log::warn!(
+                        "tool guidance for `{tool_name}` targets absent schema node `{pointer}`"
+                    );
                     continue;
                 };
-                append_description(node, rendered);
+                append_description(node, text);
             }
         }
     }
@@ -452,6 +534,7 @@ pub(crate) fn init(fs: Arc<dyn Fs>, cx: &mut App) {
     let watcher = spawn_watcher(fs, cx);
     cx.set_global(ToolGuidanceStore {
         user_files: BTreeMap::new(),
+        render_cache: RefCell::new(None),
         _watcher: watcher,
     });
 }
@@ -476,6 +559,8 @@ fn spawn_watcher(fs: Arc<dyn Fs>, cx: &mut App) -> Task<()> {
             cx.update(|cx| {
                 cx.update_global::<ToolGuidanceStore, _>(|store, _| {
                     store.user_files = user_files.clone();
+                    // Overrides changed: previously rendered guidance is stale.
+                    *store.render_cache.borrow_mut() = None;
                 });
             });
 
@@ -748,5 +833,115 @@ mod tests {
                 panic!("failed to dump schema docs for {}: {err}", tool.name)
             });
         }
+    }
+
+    fn guidance_context(available_tools: &[SharedString]) -> RulesTemplateContext<'_> {
+        RulesTemplateContext {
+            available_tools,
+            model_name: None,
+            date: "1970-01-01",
+            is_linux: false,
+            is_windows: false,
+            is_macos: false,
+            sandboxing: false,
+            scoped: false,
+            scoped_roots: &[],
+        }
+    }
+
+    #[test]
+    fn renders_are_cached_until_the_context_changes() {
+        let store = ToolGuidanceStore::for_test(BTreeMap::new());
+        let tools = [SharedString::from("edit_file")];
+        let context = guidance_context(&tools);
+
+        let first = store.rendered_guidance(&context);
+        assert!(Arc::ptr_eq(&first, &store.rendered_guidance(&context)));
+
+        let other_tools = [SharedString::from("read_file")];
+        let other_context = guidance_context(&other_tools);
+        let other = store.rendered_guidance(&other_context);
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        // The cache holds only the latest context: switching back re-renders.
+        let rerendered = store.rendered_guidance(&context);
+        assert!(!Arc::ptr_eq(&first, &rerendered));
+    }
+
+    #[test]
+    fn apply_appends_cached_guidance() {
+        let store = ToolGuidanceStore::for_test(BTreeMap::new());
+        let tools = [SharedString::from("edit_file")];
+        let context = guidance_context(&tools);
+
+        let apply = |description: &mut String, schema: &mut Value| {
+            store.apply("edit_file", description, schema, &context);
+        };
+
+        let mut description = "Base description.".to_string();
+        let mut schema = serde_json::json!({"properties": {"path": {"description": "Base."}}});
+        apply(&mut description, &mut schema);
+        assert!(
+            description.starts_with("Base description.\n\n"),
+            "{description}"
+        );
+        let path_description = schema
+            .pointer("/properties/path/description")
+            .and_then(Value::as_str)
+            .expect("path description");
+        assert!(path_description.starts_with("Base.\n\n"), "{path_description}");
+
+        // A second apply under the same context reuses the cached render.
+        let mut cached_description = "Base description.".to_string();
+        let mut cached_schema =
+            serde_json::json!({"properties": {"path": {"description": "Base."}}});
+        apply(&mut cached_description, &mut cached_schema);
+        assert_eq!(description, cached_description);
+        assert_eq!(schema, cached_schema);
+    }
+
+    #[gpui::test]
+    async fn file_changes_invalidate_cached_renders(cx: &mut gpui::TestAppContext) {
+        cx.executor().allow_parking();
+        let fs = fs::FakeFs::new(cx.executor());
+        let tool_dir = paths::tool_guidance_dir().join("edit_file");
+        fs.create_dir(&tool_dir)
+            .await
+            .expect("failed to create tool guidance directory");
+
+        cx.update(|cx| init(fs.clone(), cx));
+
+        let tools = [SharedString::from("edit_file")];
+        let context = guidance_context(&tools);
+        let render_edit_file = |cx: &gpui::App| {
+            let mut description = String::new();
+            let mut schema = serde_json::json!({});
+            ToolGuidanceStore::global(cx)
+                .expect("store should be initialized")
+                .apply("edit_file", &mut description, &mut schema, &context);
+            description
+        };
+
+        let description = cx.read(|cx| render_edit_file(cx));
+        assert!(
+            description.contains("applying edits to an existing file"),
+            "expected the built-in default guidance, got: {description}"
+        );
+
+        // An override file shadows the built-in default, even though the
+        // template context is unchanged.
+        fs.insert_file(tool_dir.join("&self.hbs"), b"Custom edit guidance.".to_vec())
+            .await;
+        cx.run_until_parked();
+
+        let description = cx.read(|cx| render_edit_file(cx));
+        assert!(
+            description.contains("Custom edit guidance."),
+            "expected the override guidance, got: {description}"
+        );
+        assert!(
+            !description.contains("applying edits to an existing file"),
+            "the override should shadow the built-in default, got: {description}"
+        );
     }
 }
