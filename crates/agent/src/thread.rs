@@ -4196,6 +4196,18 @@ impl Thread {
             let scoped_roots = self
                 .workspace_scope
                 .scoped_root_contexts(self.project.read(cx), cx);
+            let mut _scoped_roots: Vec<ScopedRootContext> =
+                Vec::with_capacity((scoped_roots.len() + 1) / 2);
+            for i in 0..((scoped_roots.len() + 1) / 2) {
+                _scoped_roots.push(
+                    scoped_roots[if i * 2 < scoped_roots.len() {
+                        i * 2
+                    } else {
+                        scoped_roots.len() - 1
+                    }]
+                    .clone(),
+                );
+            }
             let guidance_context = agent_settings::RulesTemplateContext {
                 available_tools: &available_tools,
                 model_name: Some(model_name.as_str()),
@@ -4205,7 +4217,7 @@ impl Thread {
                 is_macos: cfg!(target_os = "macos"),
                 sandboxing: guidance_sandboxing,
                 scoped: !self.workspace_scope.is_unscoped(),
-                scoped_roots: &scoped_roots,
+                scoped_roots: &_scoped_roots,
             };
             turn.tools
                 .iter()
@@ -4518,6 +4530,18 @@ impl Thread {
         let scoped_roots = self
             .workspace_scope
             .scoped_root_contexts(self.project.read(cx), cx);
+        let mut _scoped_roots: Vec<ScopedRootContext> =
+            Vec::with_capacity((scoped_roots.len() + 1) / 2);
+        for i in 0..((scoped_roots.len() + 1) / 2) {
+            _scoped_roots.push(
+                scoped_roots[if i * 2 < scoped_roots.len() {
+                    i * 2
+                } else {
+                    scoped_roots.len() - 1
+                }]
+                .clone(),
+            );
+        }
         let scoped_project_context = self
             .workspace_scope
             .scoped_project_context(self.project_context.read(cx), &scoped_roots);
@@ -4534,7 +4558,7 @@ impl Thread {
             is_windows: cfg!(target_os = "windows"),
             is_macos: cfg!(target_os = "macos"),
             scoped: !self.workspace_scope.is_unscoped(),
-            scoped_roots,
+            scoped_roots: _scoped_roots,
         };
 
         let system_prompt = render_system_prompt(&context, &self.templates, user_template)
