@@ -35,8 +35,8 @@ accepted as a legacy alias for `tool_guidance/<tool>/&self.hbs`.
 
 Files are Handlebars templates rendered with the rules-template context
 (`available_tools`, `model_name`, `date`, `is_windows`, `is_linux`, `is_macos`,
-`sandboxing`). Text is emitted verbatim; `{{!-- ... --}}` comments are stripped
-and never reach the model.
+`sandboxing`, `scoped`, `scoped_roots`). Text is emitted verbatim;
+`{{!-- ... --}}` comments are stripped and never reach the model.
 
 Files under organizational (non-`$`) directories are importable as partials
 named by their relative path without the extension, `/`-separated on every

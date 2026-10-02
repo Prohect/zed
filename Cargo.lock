@@ -432,6 +432,7 @@ dependencies = [
  "log",
  "paths",
  "project",
+ "prompt_store",
  "regex",
  "schemars 1.0.4",
  "serde",

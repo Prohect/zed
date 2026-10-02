@@ -369,6 +369,8 @@ impl EditToolTest {
                 is_linux: cfg!(target_os = "linux"),
                 is_windows: cfg!(target_os = "windows"),
                 is_macos: cfg!(target_os = "macos"),
+                scoped: false,
+                scoped_roots: Vec::new(),
             };
             let templates = Templates::new();
             template.render(&templates)?

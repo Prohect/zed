@@ -2634,6 +2634,8 @@ mod tests {
             is_windows: false,
             is_macos: false,
             sandboxing: false,
+            scoped: false,
+            scoped_roots: &[],
         }
     }
 

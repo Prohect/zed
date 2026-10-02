@@ -71,6 +71,13 @@ pub struct SystemPromptTemplateContext<'a> {
     /// Whether sandboxed terminal commands run through WSL on Windows.
     pub is_windows: bool,
     pub is_macos: bool,
+    /// Whether the session's workspace is scoped to a subset of the project's
+    /// root directories (a workspace-scoped sub-agent).
+    pub scoped: bool,
+    /// The directories the session is scoped to. Empty when unscoped. Unlike
+    /// `worktrees`, which lists the project's raw roots, a scoped root may be
+    /// nested inside a worktree root.
+    pub scoped_roots: Vec<prompt_store::ScopedRootContext>,
 }
 
 impl Template for SystemPromptTemplateContext<'_> {
@@ -197,6 +204,12 @@ impl SystemPromptProbe {
             is_linux: cfg!(target_os = "linux"),
             is_windows: cfg!(target_os = "windows"),
             is_macos: cfg!(target_os = "macos"),
+            scoped: true,
+            scoped_roots: vec![prompt_store::ScopedRootContext {
+                root_name: "crates".to_string(),
+                abs_path: std::path::Path::new("/path/to/my-project/crates").into(),
+                project_path: "my-project/crates".to_string(),
+            }],
         }
     }
 
@@ -238,6 +251,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -272,6 +287,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -302,6 +319,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -336,6 +355,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -380,6 +401,8 @@ mod tests {
             is_linux: true,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -414,6 +437,8 @@ mod tests {
             is_linux: false,
             is_windows: true,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -445,6 +470,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -468,6 +495,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -489,6 +518,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -508,6 +539,8 @@ mod tests {
             is_linux: false,
             is_windows: false,
             is_macos: false,
+            scoped: false,
+            scoped_roots: Vec::new(),
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();

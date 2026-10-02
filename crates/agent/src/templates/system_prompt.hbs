@@ -24,6 +24,8 @@ Context variables for system prompt:
   model_name        active model name, if any
   os                host operating system
   sandboxing        whether terminal commands run in the OS-level sandbox
+  scoped            whether the session is scoped to a subset of the project's roots
+  scoped_roots      directories the session is scoped to (root_name, abs_path, project_path)
   shell             default shell
   skills            catalog of skills (name, description, location)
   user_agents_md    raw user-global `AGENTS.md` content, if any
@@ -37,6 +39,8 @@ Context variables for tool guidance:
   is_windows
   model_name
   sandboxing
+  scoped
+  scoped_roots
 
 Zed registers six custom helpers: `contains` (list, item),
 `join` (list, separator), `array` (items...) for building a list
