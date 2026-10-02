@@ -125,8 +125,8 @@ pub fn default_tool_guidance_stub(tool_name: &str) -> String {
          This tool has no built-in default guidance — replace this comment with your own.\n\
          Add `<param>.hbs` files here to extend an input parameter's description, and\n\
          `$<param>/…` directories to reach nested nodes (see the README).\n\
-         Context variables: available_tools, model_name, date, is_windows, is_linux,\n\
-         is_macos, sandboxing. Gate sections with {{{{#if (contains available_tools 'x')}}}}…{{{{/if}}}}.\n\
+         Context variables: available_tools, model_name, date, is_windows, is_linux,\
+         is_macos, sandboxing, scoped, scoped_roots. Gate sections with {{{{#if (contains available_tools 'x')}}}}…{{{{/if}}}}.\n\
          Other guidance files here are importable as partials by relative path\n\
          (`shared/tips.hbs` → `{{{{> shared/tips}}}}`, `/`-separated on every platform).\n\
          --}}}}\n"
@@ -631,6 +631,8 @@ mod tests {
             is_windows: false,
             is_macos: false,
             sandboxing: false,
+            scoped: false,
+            scoped_roots: &[],
         };
         // Registering every file as a partial (including `&self` and `$node`
         // paths) must not fail, and every template must compile and render.

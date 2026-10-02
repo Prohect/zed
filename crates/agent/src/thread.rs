@@ -4193,6 +4193,9 @@ impl Thread {
         let date = Local::now().format("%Y-%m-%d").to_string();
         let tools = if let Some(turn) = self.running_turn.as_ref() {
             let available_tools = turn.tools.keys().cloned().collect::<Vec<_>>();
+            let scoped_roots = self
+                .workspace_scope
+                .scoped_root_contexts(self.project.read(cx), cx);
             let guidance_context = agent_settings::RulesTemplateContext {
                 available_tools: &available_tools,
                 model_name: Some(model_name.as_str()),
@@ -4201,6 +4204,8 @@ impl Thread {
                 is_windows: cfg!(target_os = "windows"),
                 is_macos: cfg!(target_os = "macos"),
                 sandboxing: guidance_sandboxing,
+                scoped: !self.workspace_scope.is_unscoped(),
+                scoped_roots: &scoped_roots,
             };
             turn.tools
                 .iter()
@@ -4528,6 +4533,8 @@ impl Thread {
             is_linux: cfg!(target_os = "linux"),
             is_windows: cfg!(target_os = "windows"),
             is_macos: cfg!(target_os = "macos"),
+            scoped: !self.workspace_scope.is_unscoped(),
+            scoped_roots,
         };
 
         let system_prompt = render_system_prompt(&context, &self.templates, user_template)

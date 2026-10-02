@@ -75,6 +75,11 @@ pub struct RulesTemplateContext<'a> {
     /// for this thread — the same gate the built-in system prompt applies to
     /// its sandbox section.
     pub sandboxing: bool,
+    /// Whether the session's workspace is scoped to a subset of the project's
+    /// root directories (a workspace-scoped sub-agent).
+    pub scoped: bool,
+    /// The directories the session is scoped to. Empty when unscoped.
+    pub scoped_roots: &'a [prompt_store::ScopedRootContext],
 }
 
 /// Renders a Handlebars template with the given partials registered on an
@@ -674,6 +679,8 @@ mod tests {
             is_windows: false,
             is_macos: false,
             sandboxing: false,
+            scoped: false,
+            scoped_roots: &[],
         }
     }
 
