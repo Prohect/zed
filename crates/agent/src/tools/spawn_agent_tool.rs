@@ -42,6 +42,12 @@ use crate::{AgentTool, ThreadEnvironment, ToolCallEventStream, ToolInput};
 /// - By default a subagent inherits all of your tools. Pass `tools` to restrict it to an allowlist — for example read-only tools like ["read_file", "grep", "find_path"] for a search task, or an empty list for a pure reasoning task over content in the message.
 /// - A scoped allowlist keeps focused subtasks from performing side effects you did not intend.
 ///
+/// ### Workspace scoping
+/// - Pass `workspace` to scope the subagent's whole session (its system-prompt context, its tools, and its terminals) to a subset of the project's directories — a project root, or any directory inside one.
+/// - Each entry must name a directory inside the current project, by absolute path, by root name, or by a path relative to a root (e.g. `crates/foo`).
+/// - Omit `workspace` to let the subagent inherit the parent's scope (the whole project for a top-level thread).
+/// - A subagent can narrow the scope but never widen it, and because a resumed session keeps its original scope, `workspace` cannot be combined with `session_id`.
+///
 /// ### Output
 /// - You will receive only the agent's final message as output.
 /// - Successful calls return a session_id that you can use for follow-up messages.
@@ -64,6 +70,12 @@ pub struct SpawnAgentToolInput {
     /// Optional allowlist of tool names the subagent may use (e.g. ["read_file", "grep"]). When present, the subagent is restricted to only those tools; when omitted, it inherits your full tool set. An empty list gives the subagent no tools at all. Names must be a subset of your available tools. Ignored when resuming an existing session — the session keeps the filter it was created with.
     #[serde(default)]
     pub tools: Option<Vec<String>>,
+    /// Directories inside the project this subagent's session is scoped to,
+    /// given as absolute paths, worktree root names, or paths relative to a
+    /// root (e.g. `crates/foo`). Omit to inherit the parent's scope. Cannot be
+    /// combined with `session_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Vec<String>>,
 }
 
 fn deserialize_session_id<'de, D>(deserializer: D) -> Result<Option<acp::SessionId>, D::Error>
@@ -187,14 +199,20 @@ impl AgentTool for SpawnAgentTool {
                 session_id,
                 model,
                 tools,
+                workspace,
             } = input;
             let (subagent, mut session_info) = cx.update(|cx| {
-                let subagent = match (session_id, model) {
-                    (Some(_), Some(_)) => Err(anyhow::anyhow!(
+                let subagent = match (session_id, model, workspace) {
+                    (Some(_), Some(_), _) => Err(anyhow::anyhow!(
                         "model cannot be changed when resuming a subagent session"
                     )),
-                    (Some(session_id), None) => self.environment.resume_subagent(session_id, cx),
-                    (None, model) => {
+                    (Some(_), None, Some(_)) => Err(anyhow::anyhow!(
+                        "workspace cannot be changed when resuming a subagent session"
+                    )),
+                    (Some(session_id), None, None) => {
+                        self.environment.resume_subagent(session_id, cx)
+                    }
+                    (None, model, workspace) => {
                         // A resumed session keeps the tool filter it was created
                         // with, so `tools` only applies to new sessions.
                         let tool_filter = tools
@@ -203,6 +221,7 @@ impl AgentTool for SpawnAgentTool {
                             label,
                             model.map(AgentModelId::from),
                             tool_filter,
+                            workspace,
                             cx,
                         )
                     }

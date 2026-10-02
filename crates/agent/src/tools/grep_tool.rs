@@ -1,4 +1,4 @@
-use crate::{AgentTool, ToolCallEventStream, ToolInput};
+use crate::{AgentTool, ProjectScope, ToolCallEventStream, ToolInput};
 use acp_thread::MentionUri;
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::Result;
@@ -84,11 +84,12 @@ const RESULTS_PER_PAGE: u32 = 20;
 
 pub struct GrepTool {
     project: Entity<Project>,
+    scope: ProjectScope,
 }
 
 impl GrepTool {
-    pub fn new(project: Entity<Project>) -> Self {
-        Self { project }
+    pub fn new(project: Entity<Project>, scope: ProjectScope) -> Self {
+        Self { project, scope }
     }
 }
 
@@ -135,6 +136,7 @@ impl AgentTool for GrepTool {
         cx: &mut App,
     ) -> Task<Result<Self::Output, Self::Output>> {
         let project = self.project.clone();
+        let scope = self.scope.clone();
         cx.spawn(async move |cx|  {
             let input = input
                 .recv()
@@ -236,6 +238,12 @@ impl AgentTool for GrepTool {
                 else {
                     continue;
                 };
+
+                // A scope entry may be a subdirectory of a worktree, so filter
+                // individual matches by path, not just by worktree.
+                if !scope.contains(&path) {
+                    continue;
+                }
 
                 // Check if this file should be excluded based on its worktree settings
                 if cx.update(|cx| {
@@ -610,7 +618,10 @@ mod tests {
 
         let project = Project::test(fs.clone(), [path!("/root").as_ref()], cx).await;
 
-        let tool = Arc::new(GrepTool { project });
+        let tool = Arc::new(GrepTool {
+            project,
+            scope: ProjectScope::unscoped(),
+        });
         let (event_stream, mut events) = ToolCallEventStream::test();
         let input = GrepToolInput {
             regex: "needle".to_string(),
@@ -714,7 +725,10 @@ mod tests {
 
         let project = Project::test(fs.clone(), [path!("/root").as_ref()], cx).await;
 
-        let tool = Arc::new(GrepTool { project });
+        let tool = Arc::new(GrepTool {
+            project,
+            scope: ProjectScope::unscoped(),
+        });
         let (event_stream, mut events) = ToolCallEventStream::test();
         let input = GrepToolInput {
             regex: "NEEDLE".to_string(),
@@ -1048,7 +1062,10 @@ mod tests {
         project: Entity<Project>,
         cx: &mut TestAppContext,
     ) -> String {
-        let tool = Arc::new(GrepTool { project });
+        let tool = Arc::new(GrepTool {
+            project,
+            scope: ProjectScope::unscoped(),
+        });
         let task = cx.update(|cx| {
             tool.run(
                 ToolInput::resolved(input),
