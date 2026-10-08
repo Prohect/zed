@@ -240,7 +240,7 @@ impl AgentTool for GrepTool {
 
                         if let Some(ancestor_node) = snapshot.syntax_ancestor(full_lines.clone()) {
                             let full_ancestor_range = ancestor_node.byte_range().to_point(&snapshot);
-                            let end_row = full_ancestor_range.end.row.min(full_ancestor_range.start.row + input.max_ancestor_lines);
+                            let end_row = full_ancestor_range.end.row.min(full_ancestor_range.start.row.saturating_add(input.max_ancestor_lines));
                             let end_col = snapshot.line_len(end_row);
                             let capped_ancestor_range = Point::new(full_ancestor_range.start.row, 0)..Point::new(end_row, end_col);
 
@@ -255,7 +255,7 @@ impl AgentTool for GrepTool {
                             matched.start.row.saturating_sub(input.context_lines);
                         matched.end.row = cmp::min(
                             snapshot.max_point().row,
-                            matched.end.row + input.context_lines,
+                            matched.end.row.saturating_add(input.context_lines),
                         );
                         matched.end.column = snapshot.line_len(matched.end.row);
 
@@ -1020,6 +1020,67 @@ mod tests {
             "#
         .unindent();
         assert_eq!(result, expected);
+    }
+
+    #[gpui::test]
+    async fn test_grep_context_options(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.executor().allow_parking();
+
+        let text = "fn sample() {\n    needle();\n}";
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/root"), json!({ "main.rs": text }))
+            .await;
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        project.update(cx, |project, _cx| {
+            project.languages().add(language::rust_lang())
+        });
+
+        for (regex, max_ancestor_lines, context_lines, line_label, snippet, remaining_lines) in [
+            ("sample", 0, 1, "L1", "fn sample() {", Some(2)),
+            (
+                "sample",
+                1,
+                0,
+                "L1-2",
+                "fn sample() {\n    needle();",
+                Some(1),
+            ),
+            (
+                r"sample\(\) \{\n    needle",
+                0,
+                0,
+                "L1-2",
+                "fn sample() {\n    needle();",
+                None,
+            ),
+            ("needle", 0, 0, "L2", "    needle();", None),
+            ("needle", 0, 1, "L1-3", text, None),
+            ("needle", u32::MAX, 0, "L1-3", text, None),
+            ("needle", 0, u32::MAX, "L1-3", text, None),
+        ] {
+            let input = serde_json::from_value::<GrepToolInput>(json!({
+                "regex": regex,
+                "max_ancestor_lines": max_ancestor_lines,
+                "context_lines": context_lines,
+            }))
+            .expect("valid grep input");
+            let result = run_grep_tool(input, project.clone(), cx).await;
+            let mut expected = format!(
+                "Found 1 matches:\n\n## Matches in root/main.rs\n\n### fn sample › {line_label}\n```\n{snippet}\n```\n"
+            );
+            if let Some(remaining_lines) = remaining_lines {
+                writeln!(
+                    expected,
+                    "\n{remaining_lines} lines remaining in ancestor node. Read the file to see all."
+                )
+                .expect("write to string");
+            }
+            assert_eq!(
+                result, expected,
+                "regex: {regex}, max_ancestor_lines: {max_ancestor_lines}, context_lines: {context_lines}"
+            );
+        }
     }
 
     async fn run_grep_tool(
